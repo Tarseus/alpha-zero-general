@@ -39,7 +39,7 @@ class MCTS():
         for i in range(self.args.numMCTSSims):
             self.search(canonicalBoard)
 
-            if i == 0:
+            if i == 0 and self.args.get('addRootNoise', False):
                 P = self.Ps[s0].copy()
                 valids = self.Vs[s0]
                 mask = (valids > 0)
@@ -198,6 +198,5 @@ class MCTS():
         H = -sum(pi * math.log(max(pi, 1e-12)) for pi in p)
         H_norm = H / math.log(B)
 
-        c = self.args.kc * H_norm
-        c = min(self.args.cmax, max(self.args.cmin, c))
-        return c
+        c = self.args.cmin + (self.args.cmax - self.args.cmin) * H_norm
+        return max(self.args.cmin, min(self.args.cmax, c))
