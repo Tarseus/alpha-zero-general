@@ -207,8 +207,10 @@ class NNetWrapper(NeuralNet):
 
         # Register as buffers on the underlying nn.Module so they move with .cuda()
         # and are saved in checkpoints without contributing gradients.
-        self.nnet.register_buffer('perm_fwd_ext', perm_fwd_ext, persistent=True)
-        self.nnet.register_buffer('perm_back_ext', perm_back_ext, persistent=True)
+        # Non-persistent so old checkpoints (without these buffers) load cleanly.
+        # Buffers are rebuilt at init time anyway.
+        self.nnet.register_buffer('perm_fwd_ext', perm_fwd_ext, persistent=False)
+        self.nnet.register_buffer('perm_back_ext', perm_back_ext, persistent=False)
         self._sym_order = list(range(S))
         self._sym_cycle_pos = 0
 
@@ -277,7 +279,13 @@ class NNetWrapper(NeuralNet):
             raise ("No model in path {}".format(filepath))
         map_location = None if self.args.cuda else 'cpu'
         checkpoint = torch.load(filepath, map_location=map_location)
-        self.nnet.load_state_dict(checkpoint['state_dict'])
+        result = self.nnet.load_state_dict(checkpoint['state_dict'], strict=False)
+        missing = getattr(result, 'missing_keys', [])
+        unexpected = getattr(result, 'unexpected_keys', [])
+        if missing:
+            print(f"[load_checkpoint] missing keys ignored: {missing}")
+        if unexpected:
+            print(f"[load_checkpoint] unexpected keys ignored: {unexpected}")
 
     def get_symmetries(self, boards):
         """Vectorized symmetry generation using precomputed index maps.
