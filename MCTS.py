@@ -24,6 +24,8 @@ class MCTS():
 
         self.Es = {}  # stores game.getGameEnded ended for board s
         self.Vs = {}  # stores game.getValidMoves for board s
+        # debug: count of masked-all-valids logs to avoid huge files
+        self._mask_debug_count = 0
 
     def getActionProb(self, canonicalBoard, temp=1):
         """
@@ -126,6 +128,7 @@ class MCTS():
             # leaf node
             self.Ps[s], v = self.nnet.predict(canonicalBoard)
             valids = self.game.getValidMoves(canonicalBoard, 1)
+            P_raw = self.Ps[s].copy()
             self.Ps[s] = self.Ps[s] * valids  # masking invalid moves
             sum_Ps_s = np.sum(self.Ps[s])
             if sum_Ps_s > 0:
@@ -136,6 +139,43 @@ class MCTS():
                 # NB! All valid moves may be masked if either your NNet architecture is insufficient or you've get overfitting or something else.
                 # If you have got dozens or hundreds of these messages you should pay attention to your NNet and/or training process.   
                 log.error("All valid moves were masked, doing a workaround.")
+                # debug dump
+                try:
+                    limit = int(getattr(self.args, 'mask_debug_limit', 200))
+                    if self._mask_debug_count < limit:
+                        self._mask_debug_count += 1
+                        import os, datetime
+                        os.makedirs('temp', exist_ok=True)
+                        path = os.path.join('temp', 'mcts_debug.log')
+                        valid_idx = [i for i in range(self.game.getActionSize()) if valids[i] > 0]
+                        mask = np.array(valids, dtype=np.float32) > 0
+                        p_raw = np.array(P_raw, dtype=np.float64)
+                        p_mask = p_raw * mask
+                        def topk_pairs(arr, idxs, k=10):
+                            pairs = [(float(arr[i]), int(i)) for i in idxs]
+                            pairs.sort(key=lambda x: x[0], reverse=True)
+                            return pairs[:k]
+                        top_valid = topk_pairs(p_raw, valid_idx, k=10)
+                        top_mask = topk_pairs(p_mask, valid_idx, k=10)
+                        non_finite = int(np.count_nonzero(~np.isfinite(p_raw)))
+                        ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        dyn_mode = getattr(self.args, 'dyn_c_mode', None)
+                        with open(path, 'a', encoding='utf-8') as f:
+                            f.write(f"\n[{ts}] MASKED-ALL at state s(len)={len(s)} A={self.game.getActionSize()}\n")
+                            f.write(f"use_dyn_c={getattr(self.args, 'use_dyn_c', False)}, dyn_c_mode={dyn_mode}\n")
+                            try:
+                                if hasattr(self.game, 'stringRepresentationReadable'):
+                                    br = self.game.stringRepresentationReadable(canonicalBoard)
+                                    f.write(f"board:\n{br}\n")
+                            except Exception:
+                                pass
+                            f.write(f"valid_count={len(valid_idx)}, valid_idx(sample)={valid_idx[:20]}\n")
+                            f.write(f"sum(P_raw)={float(np.nansum(p_raw)):.6g}, sum(P*valids)={float(np.nansum(p_mask)):.6g}, non_finite={non_finite}\n")
+                            if len(valid_idx) > 0:
+                                f.write(f"top_valid_P_raw (p,idx)={top_valid}\n")
+                                f.write(f"top_valid_P_mask (p,idx)={top_mask}\n")
+                except Exception as e:
+                    log.exception("Failed to write mcts_debug log: %s", e)
                 self.Ps[s] = self.Ps[s] + valids
                 self.Ps[s] /= np.sum(self.Ps[s])
 
