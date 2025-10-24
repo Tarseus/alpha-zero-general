@@ -3,6 +3,7 @@ import sys
 import time
 
 import numpy as np
+import math
 from tqdm import tqdm
 
 sys.path.append('../../')
@@ -11,6 +12,7 @@ from NeuralNet import NeuralNet
 
 import torch
 import torch.optim as optim
+from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 
 from .OthelloNNet import OthelloNNet as onnet
@@ -27,6 +29,9 @@ class NNetWrapper(NeuralNet):
 
             'use_sym': False,
             'inv_coef': 0.5,
+            'sym_k': 8,              # number of symmetry views per batch (<=8)
+            'sym_strategy': 'cycle', # one of: 'cycle', 'random'
+            'amp': True,             # mixed precision training
         })):
         self.nnet = onnet(game, args)
         self.board_x, self.board_y = game.getBoardSize()
@@ -34,8 +39,13 @@ class NNetWrapper(NeuralNet):
 
         self.args = args
 
+        # Precompute symmetry action permutations and register as module buffers
+        # so they automatically move with the model between devices.
+        self._init_action_perms()
+
         if self.args.cuda:
             self.nnet.cuda(self.args.device)
+            torch.backends.cudnn.benchmark = True
 
     def train(self, examples):
         """
@@ -56,32 +66,45 @@ class NNetWrapper(NeuralNet):
             for _ in t:
                 sample_ids = np.random.randint(len(examples), size=self.args.batch_size)
                 boards, pis, vs = list(zip(*[examples[i] for i in sample_ids]))
-                boards = torch.FloatTensor(np.array(boards).astype(np.float64))
-                target_pis = torch.FloatTensor(np.array(pis))
-                target_vs = torch.FloatTensor(np.array(vs).astype(np.float64))
+                boards = torch.tensor(np.array(boards), dtype=torch.float32)
+                target_pis = torch.tensor(np.array(pis), dtype=torch.float32)
+                target_vs = torch.tensor(np.array(vs), dtype=torch.float32)
 
-                # predict
+                # move tensors
                 if self.args.cuda:
-                    boards, target_pis, target_vs = boards.contiguous().cuda(self.args.device), target_pis.contiguous().cuda(self.args.device), target_vs.contiguous().cuda(self.args.device)
+                    boards = boards.contiguous().cuda(self.args.device)
+                    target_pis = target_pis.contiguous().cuda(self.args.device)
+                    target_vs = target_vs.contiguous().cuda(self.args.device)
 
-                if self.args.use_sym: 
-                    boards = self.get_symmetries(boards)
+                # symmetry subset
+                t_idx = None
+                if self.args.use_sym:
+                    k = max(1, min(int(getattr(self.args, 'sym_k', 8)), 8))
+                    t_idx = self._pick_sym_indices(k, getattr(self.args, 'sym_strategy', 'cycle'))
+                    boards = self.get_symmetries_subset(boards, t_idx)
 
-                # compute output
-                out_pi, out_pi_sym, out_v, out_v_sym, out_z_sym = self.nnet(boards)
+                # compute output with AMP
+                scaler = getattr(self, '_scaler', None)
+                if scaler is None:
+                    self._scaler = GradScaler(enabled=(self.args.cuda and bool(getattr(self.args, 'amp', False))))
+                    scaler = self._scaler
 
-                if out_pi_sym is not None and out_v_sym is not None:
-                    l_pi = self.loss_pi_sym(target_pis, out_pi_sym)
-                    l_v = self.loss_v_sym(target_vs, out_v_sym)
-                else:
-                    l_pi = self.loss_pi(target_pis, out_pi)
-                    l_v = self.loss_v(target_vs, out_v)
+                with autocast(enabled=(self.args.cuda and bool(getattr(self.args, 'amp', False)))):
+                    out_pi, out_pi_sym, out_v, out_v_sym, out_z_sym = self.nnet(boards)
 
-                if out_z_sym is not None:
-                    l_inv = self.loss_sym_cos(out_z_sym)
-                else:
-                    l_inv = torch.tensor(0, dtype=torch.float32)
-                total_loss = l_pi + l_v + self.args.inv_coef * l_inv
+                    if out_pi_sym is not None and out_v_sym is not None:
+                        # Use symmetric views properly aligned
+                        l_pi = self.loss_pi_sym_aligned(target_pis, out_pi_sym, t_idx)
+                        l_v = self.loss_v_sym(target_vs, out_v_sym)
+                    else:
+                        l_pi = self.loss_pi(target_pis, out_pi)
+                        l_v = self.loss_v(target_vs, out_v)
+
+                    if out_z_sym is not None:
+                        l_inv = self.loss_sym_cos(out_z_sym)
+                    else:
+                        l_inv = torch.tensor(0, dtype=torch.float32, device=boards.device)
+                    total_loss = l_pi + l_v + self.args.inv_coef * l_inv
 
                 # record loss
                 pi_losses.update(l_pi.item(), boards.size(0))
@@ -91,8 +114,13 @@ class NNetWrapper(NeuralNet):
 
                 # compute gradient and do SGD step
                 optimizer.zero_grad()
-                total_loss.backward()
-                optimizer.step()
+                if scaler.is_enabled():
+                    scaler.scale(total_loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    total_loss.backward()
+                    optimizer.step()
 
     def predict(self, board):
         """
@@ -135,7 +163,89 @@ class NNetWrapper(NeuralNet):
         return torch.sum((targets - outputs.view(-1)) ** 2) / targets.size()[0]
         
     def loss_pi_sym(self, targets, outputs):
+        # Kept for backward compatibility; uses only the last view.
         return -torch.sum(targets * outputs[:, -1, :]) / targets.size()[0]
+
+    def _init_action_perms(self):
+        """Build action index permutations for 8 board symmetries.
+
+        For a base action index a in [0, n*n), perm_fwd[t, a] gives the index of
+        the corresponding action in the t-th symmetric view. The pass action
+        (index n*n) maps to itself.
+        """
+        n = int(self.board_x)
+        assert n == int(self.board_y), "Only square boards are supported for sym perms"
+
+        A = n * n
+        # base index grid 0..A-1
+        base = torch.arange(A, dtype=torch.long)
+        grid = base.view(n, n)
+
+        perms = []
+        for i in range(1, 5):
+            for j in (True, False):
+                M = torch.rot90(grid, i, dims=(0, 1))
+                if j:
+                    M = torch.flip(M, dims=(1,))
+                perms.append(M.reshape(-1))
+        perm_fwd = torch.stack(perms, dim=0)  # (8, A) base -> sym index
+
+        # inverse permutations: sym index -> base
+        perm_back = torch.empty_like(perm_fwd)
+        for t in range(perm_fwd.size(0)):
+            inv = torch.empty(A, dtype=torch.long)
+            inv[perm_fwd[t]] = base
+            perm_back[t] = inv
+
+        # extend to include pass action
+        pass_id = A
+        S = perm_fwd.size(0)
+        perm_fwd_ext = torch.full((S, A + 1), pass_id, dtype=torch.long)
+        perm_back_ext = torch.full((S, A + 1), pass_id, dtype=torch.long)
+        perm_fwd_ext[:, :A] = perm_fwd
+        perm_back_ext[:, :A] = perm_back
+
+        # Register as buffers on the underlying nn.Module so they move with .cuda()
+        # and are saved in checkpoints without contributing gradients.
+        self.nnet.register_buffer('perm_fwd_ext', perm_fwd_ext, persistent=True)
+        self.nnet.register_buffer('perm_back_ext', perm_back_ext, persistent=True)
+        self._sym_order = list(range(S))
+        self._sym_cycle_pos = 0
+
+    def _pick_sym_indices(self, k: int, strategy: str = 'cycle'):
+        S = len(self._sym_order)
+        if strategy == 'random':
+            idx = torch.randperm(S)[:k].tolist()
+        else:  # cycle
+            start = self._sym_cycle_pos
+            idx = [self._sym_order[(start + i) % S] for i in range(k)]
+            self._sym_cycle_pos = (start + k) % S
+        return idx
+
+    def loss_pi_sym_aligned(self, targets, outputs_sym, t_idx=None):
+        """Cross-entropy using all symmetric outputs properly aligned.
+
+        targets: (B, A) in base orientation (probabilities)
+        outputs_sym: (B, 8, A) log-probs for each symmetry view
+
+        We align each view's action indices back to base via perm_fwd, then
+        aggregate across views by log-mean-exp.
+        """
+        B, S, A = outputs_sym.shape
+        device = outputs_sym.device
+        # select subset of perms if provided
+        if t_idx is None:
+            perm = self.nnet.perm_fwd_ext
+        else:
+            perm = self.nnet.perm_fwd_ext[torch.as_tensor(t_idx, dtype=torch.long, device=device)]
+        # (1,S,A) -> (B,S,A)
+        index = perm.to(device).unsqueeze(0).expand(B, -1, -1)
+        aligned = torch.gather(outputs_sym, dim=2, index=index)  # (B,S,A)
+
+        # log-mean-exp across S
+        lme = torch.logsumexp(aligned, dim=1) - math.log(aligned.size(1))
+
+        return -torch.sum(targets.to(device) * lme) / targets.size(0)
     
     def loss_v_sym(self, targets, outputs):
         return ((outputs - targets.unsqueeze(-1).unsqueeze(1)) ** 2).mean()
@@ -170,19 +280,36 @@ class NNetWrapper(NeuralNet):
         self.nnet.load_state_dict(checkpoint['state_dict'])
 
     def get_symmetries(self, boards):
-        # boards.shape: batchsize x n x n
-        assert boards.ndim == 3 and boards.shape[1] == 8 and boards.shape[2] == 8, \
-            f"Expected (B, 8, 8), got {tuple(boards.shape)}"
+        """Vectorized symmetry generation using precomputed index maps.
 
-        syms = []
-        for i in range(1, 5):
-            for j in [True, False]:
-                newB = torch.rot90(boards, i, dims=(1, 2))
-                if j:
-                    newB = torch.flip(newB, dims=(2,))
-                syms.append(newB)
+        boards: (B, n, n) float tensor
+        returns: (B, 8, n, n)
+        """
+        assert boards.ndim == 3 and boards.shape[1] == boards.shape[2], \
+            f"Expected (B, n, n) square boards, got {tuple(boards.shape)}"
 
-        out = torch.stack(syms, dim=1)
+        B, n, _ = boards.shape
+        A = n * n
+        device = boards.device
 
-        assert out.shape[1] == 8
+        boards_flat = boards.view(B, A)                      # (B, A)
+        perm = self.nnet.perm_back_ext[:, :A]                # (8, A)
+        idx = perm.unsqueeze(0).expand(B, -1, -1)            # (B, 8, A)
+        src = boards_flat.unsqueeze(1).expand(-1, idx.size(1), -1)  # (B, 8, A)
+        out = torch.gather(src, dim=2, index=idx)            # (B, 8, A)
+        out = out.view(B, idx.size(1), n, n)
+        return out
+
+    def get_symmetries_subset(self, boards: torch.Tensor, t_idx):
+        """Return subset of symmetry views specified by indices t_idx (list[int])."""
+        assert boards.ndim == 3 and boards.shape[1] == boards.shape[2], \
+            f"Expected (B, n, n) square boards, got {tuple(boards.shape)}"
+        B, n, _ = boards.shape
+        A = n * n
+        device = boards.device
+        k = len(t_idx)
+        perm = self.nnet.perm_back_ext[:, :A][torch.as_tensor(t_idx, dtype=torch.long, device=device)]  # (K,A)
+        idx = perm.unsqueeze(0).expand(B, -1, -1)            # (B, K, A)
+        src = boards.view(B, A).unsqueeze(1).expand(-1, k, -1)
+        out = torch.gather(src, dim=2, index=idx).view(B, k, n, n)
         return out
