@@ -15,28 +15,27 @@ import torch.nn.functional as F
 
 from .OthelloNNet import OthelloNNet as onnet
 
-args = dotdict({
-    'lr': 0.001,
-    'dropout': 0.3,
-    'epochs': 10,
-    'batch_size': 256,
-    'cuda': torch.cuda.is_available(),
-    'device': 1,
-    'num_channels': 512,
-
-    'use_sym': True,
-    'inv_coef': 0.5,
-})
-
-
 class NNetWrapper(NeuralNet):
-    def __init__(self, game):
+    def __init__(self, game, args = dotdict({
+            'lr': 0.001,
+            'dropout': 0.3,
+            'epochs': 10,
+            'batch_size': 256,
+            'cuda': torch.cuda.is_available(),
+            'device': 1,
+            'num_channels': 512,
+
+            'use_sym': False,
+            'inv_coef': 0.5,
+        })):
         self.nnet = onnet(game, args)
         self.board_x, self.board_y = game.getBoardSize()
         self.action_size = game.getActionSize()
 
-        if args.cuda:
-            self.nnet.cuda(args.device)
+        self.args = args
+
+        if self.args.cuda:
+            self.nnet.cuda(self.args.device)
 
     def train(self, examples):
         """
@@ -44,28 +43,28 @@ class NNetWrapper(NeuralNet):
         """
         optimizer = optim.Adam(self.nnet.parameters())
 
-        for epoch in range(args.epochs):
+        for epoch in range(self.args.epochs):
             print('EPOCH ::: ' + str(epoch + 1))
             self.nnet.train()
             pi_losses = AverageMeter()
             v_losses = AverageMeter()
             inv_losses = AverageMeter()
 
-            batch_count = int(len(examples) / args.batch_size)
+            batch_count = int(len(examples) / self.args.batch_size)
 
             t = tqdm(range(batch_count), desc='Training Net')
             for _ in t:
-                sample_ids = np.random.randint(len(examples), size=args.batch_size)
+                sample_ids = np.random.randint(len(examples), size=self.args.batch_size)
                 boards, pis, vs = list(zip(*[examples[i] for i in sample_ids]))
                 boards = torch.FloatTensor(np.array(boards).astype(np.float64))
                 target_pis = torch.FloatTensor(np.array(pis))
                 target_vs = torch.FloatTensor(np.array(vs).astype(np.float64))
 
                 # predict
-                if args.cuda:
-                    boards, target_pis, target_vs = boards.contiguous().cuda(args.device), target_pis.contiguous().cuda(args.device), target_vs.contiguous().cuda(args.device)
+                if self.args.cuda:
+                    boards, target_pis, target_vs = boards.contiguous().cuda(self.args.device), target_pis.contiguous().cuda(self.args.device), target_vs.contiguous().cuda(self.args.device)
 
-                if args.use_sym: 
+                if self.args.use_sym: 
                     boards = self.get_symmetries(boards)
 
                 # compute output
@@ -81,8 +80,8 @@ class NNetWrapper(NeuralNet):
                 if out_z_sym is not None:
                     l_inv = self.loss_sym_cos(out_z_sym)
                 else:
-                    l_inv = 0
-                total_loss = l_pi + l_v + args.inv_coef * l_inv
+                    l_inv = torch.tensor(0, dtype=torch.float32)
+                total_loss = l_pi + l_v + self.args.inv_coef * l_inv
 
                 # record loss
                 pi_losses.update(l_pi.item(), boards.size(0))
@@ -117,7 +116,7 @@ class NNetWrapper(NeuralNet):
             raise ValueError("Board has incorrect dimensions.")
 
         with torch.no_grad():
-            x = torch.from_numpy(board_np).to(args.device)
+            x = torch.from_numpy(board_np).to(self.args.device)
             pi_logits, _, v, _, _ = self.nnet(x)
             pi = torch.exp(pi_logits)
         
@@ -166,7 +165,7 @@ class NNetWrapper(NeuralNet):
         filepath = os.path.join(folder, filename)
         if not os.path.exists(filepath):
             raise ("No model in path {}".format(filepath))
-        map_location = None if args.cuda else 'cpu'
+        map_location = None if self.args.cuda else 'cpu'
         checkpoint = torch.load(filepath, map_location=map_location)
         self.nnet.load_state_dict(checkpoint['state_dict'])
 

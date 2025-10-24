@@ -44,7 +44,7 @@ class MCTS():
                 valids = self.Vs[s0]
                 mask = (valids > 0)
                 eps = 0.25
-                alpha = getattr(self.args, 'dirichletAlpha', 0.3)
+                alpha = self.args.get('dirichletAlpha', 0.3)
                 eta = np.zeros_like(P)
                 m = int(mask.sum())
                 if m > 0:
@@ -147,14 +147,19 @@ class MCTS():
         cur_best = -float('inf')
         best_act = -1
 
+        if self.args.use_dyn_c:
+            c = self._cpuct_from_entropy(s, valids)
+        else:
+            c = self.args.cpuct
+
         # pick the action with the highest upper confidence bound
         for a in range(self.game.getActionSize()):
             if valids[a]:
                 if (s, a) in self.Qsa:
-                    u = self.Qsa[(s, a)] + self.args.cpuct * self.Ps[s][a] * math.sqrt(self.Ns[s]) / (
+                    u = self.Qsa[(s, a)] + c * self.Ps[s][a] * math.sqrt(self.Ns[s]) / (
                             1 + self.Nsa[(s, a)])
                 else:
-                    u = self.args.cpuct * self.Ps[s][a] * math.sqrt(self.Ns[s] + EPS)  # Q = 0 ?
+                    u = c * self.Ps[s][a] * math.sqrt(self.Ns[s] + EPS)  # Q = 0 ?
 
                 if u > cur_best:
                     cur_best = u
@@ -176,3 +181,23 @@ class MCTS():
 
         self.Ns[s] += 1
         return -v
+
+    def _cpuct_from_entropy(self, s, valids):
+        valid_idx = [a for a in range(self.game.getActionSize()) if valids[a]]
+        B = len(valid_idx)
+        if B <= 1:
+            return self.args.cmin
+
+        p = [max(float(self.Ps[s][a]), 0.0) for a in valid_idx]
+        Z = sum(p)
+        if Z <= 0.0:
+            p = [1.0 / B] * B
+        else:
+            p = [pi / Z for pi in p]
+
+        H = -sum(pi * math.log(max(pi, 1e-12)) for pi in p)
+        H_norm = H / math.log(B)
+
+        c = self.args.kc * H_norm
+        c = min(self.args.cmax, max(self.args.cmin, c))
+        return c

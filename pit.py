@@ -25,30 +25,48 @@ else:
 rp = RandomPlayer(g).play
 gp = GreedyOthelloPlayer(g).play
 hp = HumanOthelloPlayer(g).play
-
+mp = AlphaBetaOthelloPlayer(g, depth=3).play
 
 
 # nnet players
+
+# args1 = dotdict({
+#     'numMCTSSims': 50, 
+#     'cpuct':1.0, 
+#     'use_dyn_c': True,
+#     'cmin': 0.5,
+#     'cmax': 3.0,
+#     'kc': 3.0,})
+
+args1 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False})
 n1 = NNet(g)
-if mini_othello:
-    n1.load_checkpoint('./pretrained_models/othello/pytorch/','6x100x25_best.pth.tar')
-else:
-    n1.load_checkpoint('./pretrained_models/othello/pytorch/','8x8_100checkpoints_best.pth.tar')
-args1 = dotdict({'numMCTSSims': 50, 'cpuct':1.0})
+# n1.load_checkpoint('./pretrained_models/othello/pytorch/','8x8_100checkpoints_best.pth.tar')
+n1.load_checkpoint('./models/', 'baseline.pth.tar')
 mcts1 = MCTS(g, n1, args1)
 n1p = lambda x: np.argmax(mcts1.getActionProb(x, temp=0))
 
-if human_vs_cpu:
-    player2 = hp
-else:
-    n2 = NNet(g)
-    n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
-    args2 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0})
-    mcts2 = MCTS(g, n2, args2)
-    n2p = lambda x: np.argmax(mcts2.getActionProb(x, temp=0))
+# args2 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False})
+args2 = dotdict({
+    'numMCTSSims': 50, 
+    'cpuct':1.0, 
+    'use_dyn_c': True,
+    'cmin': 0.5,
+    'cmax': 3.0,
+    'kc': 3.0,})
+n2 = NNet(g)
+# n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
+n2.load_checkpoint('./models/', 'baseline.pth.tar')
+mcts2 = MCTS(g, n2, args2)
+n2p = lambda x: np.argmax(mcts2.getActionProb(x, temp=0))
 
-    player2 = n2p  # Player 2 is neural network if it's cpu vs cpu.
+player1 = n1p
 
-arena = Arena.Arena(n1p, player2, g, display=OthelloGame.display)
+player2 = n2p  # Player 2 is neural network if it's cpu vs cpu.
 
-print(arena.playGames(2, verbose=True))
+arena = Arena.Arena(player1, player2, g, display=OthelloGame.display)
+
+start = time.time()
+result = arena.playGames(10, verbose=False)
+game_time = time.time() - start
+
+print(result, game_time)
