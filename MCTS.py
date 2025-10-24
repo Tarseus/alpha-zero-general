@@ -37,7 +37,7 @@ class MCTS():
 
         s0 = self.game.stringRepresentation(canonicalBoard)
         for i in range(self.args.numMCTSSims):
-            self.search(canonicalBoard)
+            self.search(canonicalBoard, depth=0)
 
             if i == 0:
                 P = self.Ps[s0].copy()
@@ -68,7 +68,7 @@ class MCTS():
         probs = [x / counts_sum for x in counts]
         return probs
 
-    def search(self, canonicalBoard):
+    def search(self, canonicalBoard, depth=0):
         """
         This function performs one iteration of MCTS. It is recursively called
         till a leaf node is found. The action chosen at each node is one that
@@ -148,7 +148,11 @@ class MCTS():
         best_act = -1
 
         if self.args.use_dyn_c:
-            c = self._cpuct_from_entropy(s, valids)
+            mode = getattr(self.args, 'dyn_c_mode', 'entropy')
+            if mode == 'othello':
+                c = self._cpuct_othello(canonicalBoard, s, valids, depth)
+            else:
+                c = self._cpuct_from_entropy(s, valids)
         else:
             c = self.args.cpuct
 
@@ -169,7 +173,7 @@ class MCTS():
         next_s, next_player = self.game.getNextState(canonicalBoard, 1, a)
         next_s = self.game.getCanonicalForm(next_s, next_player)
 
-        v = self.search(next_s)
+        v = self.search(next_s, depth + 1)
 
         if (s, a) in self.Qsa:
             self.Qsa[(s, a)] = (self.Nsa[(s, a)] * self.Qsa[(s, a)] + v) / (self.Nsa[(s, a)] + 1)
@@ -198,6 +202,102 @@ class MCTS():
         H = -sum(pi * math.log(max(pi, 1e-12)) for pi in p)
         H_norm = H / math.log(B)
 
-        c = self.args.kc * H_norm
-        c = min(self.args.cmax, max(self.args.cmin, c))
-        return c
+        c = self.args.cmin + (self.args.cmax - self.args.cmin) * H_norm
+        return max(self.args.cmin, min(self.args.cmax, c))
+
+    def _cpuct_othello(self, board, s, valids, depth):
+        n0, n1 = self.game.getBoardSize()
+        n = int(n0)
+        A = self.game.getActionSize()
+        pass_idx = A - 1
+
+        valid_idx = [a for a in range(A) if valids[a] and a != pass_idx]
+        B = len(valid_idx)
+        if B <= 1:
+            return self.args.cmin
+
+        p = [max(float(self.Ps[s][a]), 0.0) for a in valid_idx]
+        Z = sum(p)
+        if Z <= 0.0:
+            p = [1.0 / B] * B
+        else:
+            p = [pi / Z for pi in p]
+        H = -sum(pi * math.log(max(pi, 1e-12)) for pi in p)
+        H_norm = H / math.log(B)
+
+        E = int((board == 0).sum()) if hasattr(board, 'sum') else 0
+        denom = max(n * n - 4, 1)
+        r_e = min(1.0, max(0.0, E / float(denom)))
+
+        B_ref = max(1.0, 0.22 * n * n)
+        r_m = min(1.0, B / B_ref)
+
+        Qs = [self.Qsa[(s, a)] for a in valid_idx if (s, a) in self.Qsa]
+        if len(Qs) >= 2:
+            std_q = float(np.std(Qs))
+            kappa = float(getattr(self.args, 'othello_q_kappa', 0.5))
+            r_q = math.tanh(std_q / max(kappa, 1e-6))
+        else:
+            r_q = 0.0
+
+        if n >= 3:
+            x_squares = {(1, 1), (1, n - 2), (n - 2, 1), (n - 2, n - 2)}
+        else:
+            x_squares = set()
+        if n >= 2:
+            c_squares = {
+                (0, 1), (1, 0), (0, n - 2), (1, n - 1),
+                (n - 1, 1), (n - 2, 0), (n - 2, n - 1), (n - 1, n - 2)
+            }
+        else:
+            c_squares = set()
+
+        def assoc_corner(rc):
+            r, c = rc
+            if (r, c) in x_squares:
+                if r == 1 and c == 1:
+                    return (0, 0)
+                if r == 1 and c == n - 2:
+                    return (0, n - 1)
+                if r == n - 2 and c == 1:
+                    return (n - 1, 0)
+                if r == n - 2 and c == n - 2:
+                    return (n - 1, n - 1)
+            if (r, c) in c_squares:
+                if r == 0 and c == 1: return (0, 0)
+                if r == 1 and c == 0: return (0, 0)
+                if r == 0 and c == n - 2: return (0, n - 1)
+                if r == 1 and c == n - 1: return (0, n - 1)
+                if r == n - 1 and c == 1: return (n - 1, 0)
+                if r == n - 2 and c == 0: return (n - 1, 0)
+                if r == n - 2 and c == n - 1: return (n - 1, n - 1)
+                if r == n - 1 and c == n - 2: return (n - 1, n - 1)
+            return None
+
+        danger_cnt = 0
+        for a in valid_idx:
+            r = a // n
+            c = a % n
+            if (r, c) in x_squares or (r, c) in c_squares:
+                corner = assoc_corner((r, c))
+                if corner is not None:
+                    cr, cc = corner
+                    if 0 <= cr < n and 0 <= cc < n and board[cr][cc] == 0:
+                        danger_cnt += 1
+        danger = danger_cnt / float(B) if B > 0 else 0.0
+
+        w_e, w_m, w_h, w_q = 0.40, 0.25, 0.20, 0.15
+        score = w_e * r_e + w_m * r_m + w_h * H_norm + w_q * r_q
+        score = max(0.0, min(1.0, score))
+
+        cmin = float(getattr(self.args, 'cmin', 0.5))
+        cmax = float(getattr(self.args, 'cmax', 3.0))
+        base = cmin + (cmax - cmin) * score
+
+        danger_w = float(getattr(self.args, 'othello_danger_weight', 0.5))
+        base *= (1.0 - danger_w * danger)
+
+        tau = float(getattr(self.args, 'othello_depth_tau', 8.0))
+        c = base / (1.0 + float(depth) / max(tau, 1e-6))
+
+        return max(cmin, min(cmax, c))
