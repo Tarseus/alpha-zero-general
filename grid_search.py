@@ -15,7 +15,7 @@ from utils import *
 use this script to play any two agents against each other, or play manually with
 any agent.
 """
-
+# nohup python grid_search.py --mode othello --cmin-list 0.8,0.9 --cmax-list 1.3,1.5 --tau-list 6,8,12 --danger-list 0.3,0.5,0.7 --kappa-list 0.4,0.5 --games 100 --sims 50 > test.log 2>&1 &
 parser = argparse.ArgumentParser(description="Grid search dynamic exploration params")
 parser.add_argument("--mini", action="store_true", help="Use 6x6 Othello (default 8x8)")
 parser.add_argument("--games", type=int, default=100, help="Games per configuration")

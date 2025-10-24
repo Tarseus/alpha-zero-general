@@ -1,0 +1,1 @@
+nohup python grid_search.py --mode othello --cmin-list 0.8,0.9 --cmax-list 1.3,1.5 --tau-list 6,8,12 --danger-list 0.3,0.5,0.7 --kappa-list 0.4,0.5 --games 10 --sims 50 > test.log 2>&1 &

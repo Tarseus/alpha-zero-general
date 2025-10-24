@@ -96,8 +96,11 @@ args = dotdict({
     'device': 0,
     'num_channels': 512,
 
-    'use_sym': False,
-    'inv_coef': 0.5,
+    'use_sym': True,
+    'inv_coef': 0.1,
+    'sym_k': 8,              # number of symmetry views per batch (<=8)
+    'sym_strategy': 'cycle', # one of: 'cycle', 'random'
+    'amp': False,             # mixed precision training
 })
 
 

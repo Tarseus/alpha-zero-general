@@ -27,11 +27,11 @@ class NNetWrapper(NeuralNet):
             'device': 1,
             'num_channels': 512,
 
-            'use_sym': False,
-            'inv_coef': 0.5,
+            'use_sym': True,
+            'inv_coef': 0.1,
             'sym_k': 8,              # number of symmetry views per batch (<=8)
             'sym_strategy': 'cycle', # one of: 'cycle', 'random'
-            'amp': True,             # mixed precision training
+            'amp': False,             # mixed precision training
         })):
         self.nnet = onnet(game, args)
         self.board_x, self.board_y = game.getBoardSize()
