@@ -181,29 +181,35 @@ class NNetWrapper(NeuralNet):
         base = torch.arange(A, dtype=torch.long)
         grid = base.view(n, n)
 
-        perms = []
+        # Build sym->base mapping first by rotating the index grid.
+        # M.reshape(-1)[j] = a means: at symmetric view position j lies base index a.
+        perms_sym2base = []
         for i in range(1, 5):
             for j in (True, False):
                 M = torch.rot90(grid, i, dims=(0, 1))
                 if j:
                     M = torch.flip(M, dims=(1,))
-                perms.append(M.reshape(-1))
-        perm_fwd = torch.stack(perms, dim=0)  # (8, A) base -> sym index
+                perms_sym2base.append(M.reshape(-1))
+        perm_sym2base = torch.stack(perms_sym2base, dim=0)  # (8, A) sym index -> base index
 
-        # inverse permutations: sym index -> base
-        perm_back = torch.empty_like(perm_fwd)
-        for t in range(perm_fwd.size(0)):
+        # Invert to get base->sym mapping so that for a base action 'a', perm_base2sym[t, a]
+        # gives the action index in the t-th symmetric view.
+        perm_base2sym = torch.empty_like(perm_sym2base)
+        for t in range(perm_sym2base.size(0)):
             inv = torch.empty(A, dtype=torch.long)
-            inv[perm_fwd[t]] = base
-            perm_back[t] = inv
+            inv[perm_sym2base[t]] = base
+            perm_base2sym[t] = inv
 
         # extend to include pass action
         pass_id = A
         S = perm_fwd.size(0)
         perm_fwd_ext = torch.full((S, A + 1), pass_id, dtype=torch.long)
         perm_back_ext = torch.full((S, A + 1), pass_id, dtype=torch.long)
-        perm_fwd_ext[:, :A] = perm_fwd
-        perm_back_ext[:, :A] = perm_back
+        # Note: by convention
+        #  - perm_fwd_ext: base -> sym index (forward)
+        #  - perm_back_ext: sym index -> base index (backward)
+        perm_fwd_ext[:, :A] = perm_base2sym
+        perm_back_ext[:, :A] = perm_sym2base
 
         # Register as buffers on the underlying nn.Module so they move with .cuda()
         # and are saved in checkpoints without contributing gradients.
