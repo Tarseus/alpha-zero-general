@@ -157,6 +157,17 @@ class MCTS():
                             return pairs[:k]
                         top_valid = topk_pairs(p_raw, valid_idx, k=10)
                         top_mask = topk_pairs(p_mask, valid_idx, k=10)
+                        # also check where the mass actually goes (invalid moves)
+                        A = int(self.game.getActionSize())
+                        invalid_idx = [i for i in range(A) if not (valids[i] > 0)]
+                        top_invalid = topk_pairs(p_raw, invalid_idx, k=10)
+                        # pass action info (common in Othello)
+                        pass_idx = A - 1
+                        pass_prob = float(p_raw[pass_idx]) if 0 <= pass_idx < len(p_raw) else float('nan')
+                        pass_is_valid = bool(valids[pass_idx] > 0) if 0 <= pass_idx < len(valids) else False
+                        # argmax info
+                        argmax_idx = int(np.argmax(p_raw)) if p_raw.size > 0 else -1
+                        argmax_is_valid = bool(valids[argmax_idx] > 0) if 0 <= argmax_idx < len(valids) else False
                         non_finite = int(np.count_nonzero(~np.isfinite(p_raw)))
                         ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                         dyn_mode = getattr(self.args, 'dyn_c_mode', None)
@@ -174,6 +185,10 @@ class MCTS():
                             if len(valid_idx) > 0:
                                 f.write(f"top_valid_P_raw (p,idx)={top_valid}\n")
                                 f.write(f"top_valid_P_mask (p,idx)={top_mask}\n")
+                            # extra diagnostics
+                            f.write(f"top_invalid_P_raw (p,idx)={top_invalid}\n")
+                            f.write(f"argmax_idx={argmax_idx}, argmax_is_valid={int(argmax_is_valid)}\n")
+                            f.write(f"pass_idx={pass_idx}, pass_is_valid={int(pass_is_valid)}, pass_prob={pass_prob:.6g}\n")
                 except Exception as e:
                     log.exception("Failed to write mcts_debug log: %s", e)
                 self.Ps[s] = self.Ps[s] + valids
