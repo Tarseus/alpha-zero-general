@@ -99,6 +99,8 @@ args = dotdict({
     'use_sym': True,
     'inv_coef': 0.05,
     'sym_k': 8,              # number of symmetry views per batch (<=8)
+    'sym_strategy': 'cycle', # one of: 'cycle', 'random'
+    'amp': False,             # mixed precision training
 })
 
 
