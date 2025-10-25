@@ -41,6 +41,7 @@ class NNetWrapper(NeuralNet):
 
         # Precompute symmetry action permutations and register as module buffers
         # so they automatically move with the model between devices.
+        # Note: we keep symmetry buffers for encoder invariance loss only.
         self._init_action_perms()
 
         if self.args.cuda:
@@ -76,11 +77,24 @@ class NNetWrapper(NeuralNet):
                     target_pis = target_pis.contiguous().cuda(self.args.device)
                     target_vs = target_vs.contiguous().cuda(self.args.device)
 
-                # symmetry subset
+                # symmetry subset (encoder invariance only; policy/value use base view)
                 t_idx = None
                 if self.args.use_sym:
                     k = max(1, min(int(getattr(self.args, 'sym_k', 8)), 8))
                     t_idx = self._pick_sym_indices(k, getattr(self.args, 'sym_strategy', 'cycle'))
+                    # ensure the identity view is present and is the last view,
+                    # so that out_pi/out_v correspond to the base orientation
+                    # matching targets without action reindexing.
+                    if hasattr(self, '_sym_identity'):
+                        ident = int(self._sym_identity)
+                        # move identity to the end; insert if missing
+                        if ident in t_idx:
+                            t_idx = [t for t in t_idx if t != ident] + [ident]
+                        else:
+                            if len(t_idx) > 0:
+                                t_idx = t_idx[:-1] + [ident]
+                            else:
+                                t_idx = [ident]
                     boards = self.get_symmetries_subset(boards, t_idx)
 
                 # compute output with AMP
@@ -92,16 +106,17 @@ class NNetWrapper(NeuralNet):
                 with autocast(enabled=(self.args.cuda and bool(getattr(self.args, 'amp', False)))):
                     out_pi, out_pi_sym, out_v, out_v_sym, out_z_sym = self.nnet(boards)
 
-                    if out_pi_sym is not None and out_v_sym is not None:
-                        # Use symmetric views properly aligned
-                        l_pi = self.loss_pi_sym_aligned(target_pis, out_pi_sym, t_idx)
-                        l_v = self.loss_v_sym(target_vs, out_v_sym)
-                    else:
-                        l_pi = self.loss_pi(target_pis, out_pi)
-                        l_v = self.loss_v(target_vs, out_v)
+                    # Do NOT use symmetric action/value alignment. We keep only
+                    # encoder invariance auxiliary loss. Policy/value are trained
+                    # against the base (identity) view outputs.
+                    l_pi = self.loss_pi(target_pis, out_pi)
+                    l_v = self.loss_v(target_vs, out_v)
 
                     if out_z_sym is not None:
-                        l_inv = self.loss_sym_cos(out_z_sym)
+                        l_inv = self.loss_sym_to_identity(
+                            out_z_sym,
+                            stopgrad=bool(getattr(self.args, 'sym_anchor_stopgrad', True))
+                        )
                     else:
                         l_inv = torch.tensor(0, dtype=torch.float32, device=boards.device)
                     total_loss = l_pi + l_v + self.args.inv_coef * l_inv
@@ -166,6 +181,25 @@ class NNetWrapper(NeuralNet):
         # Kept for backward compatibility; uses only the last view.
         return -torch.sum(targets * outputs[:, -1, :]) / targets.size()[0]
 
+    def loss_sym_to_identity(self, out_z_sym, stopgrad=True):
+        """Align symmetric encodings to the identity-view encoding.
+
+        out_z_sym: (B, S, D) encoder features for S symmetry views.
+        Assumes the last view (index S-1) is the identity view, as ensured by
+        the training batch preparation. Uses cosine similarity.
+        """
+        if out_z_sym.dim() != 3 or out_z_sym.size(1) <= 1:
+            # no symmetric views to compare; return zero loss
+            return torch.tensor(0, dtype=torch.float32, device=out_z_sym.device)
+
+        z = F.normalize(out_z_sym, p=2, dim=-1)   # (B, S, D)
+        anchor = z[:, -1, :]                      # (B, D)
+        if stopgrad:
+            anchor = anchor.detach()
+        # cosine similarity to identity for all non-identity views
+        cos = (z[:, :-1, :] * anchor.unsqueeze(1)).sum(dim=-1)  # (B, S-1)
+        return (1.0 - cos).mean()
+
     def _init_action_perms(self):
         """Build action index permutations for 8 board symmetries.
 
@@ -202,7 +236,7 @@ class NNetWrapper(NeuralNet):
 
         # extend to include pass action
         pass_id = A
-        S = perm_fwd.size(0)
+        S = perm_base2sym.size(0)
         perm_fwd_ext = torch.full((S, A + 1), pass_id, dtype=torch.long)
         perm_back_ext = torch.full((S, A + 1), pass_id, dtype=torch.long)
         # Note: by convention
@@ -219,6 +253,10 @@ class NNetWrapper(NeuralNet):
         self.nnet.register_buffer('perm_back_ext', perm_back_ext, persistent=False)
         self._sym_order = list(range(S))
         self._sym_cycle_pos = 0
+        # find the identity symmetry index (the one mapping to itself)
+        is_identity = (perm_sym2base == base).all(dim=1)
+        idxs = torch.nonzero(is_identity, as_tuple=False).view(-1)
+        self._sym_identity = int(idxs[0].item()) if idxs.numel() > 0 else S - 1
 
     def _pick_sym_indices(self, k: int, strategy: str = 'cycle'):
         S = len(self._sym_order)
