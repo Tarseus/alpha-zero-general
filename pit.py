@@ -30,14 +30,14 @@ mp = AlphaBetaOthelloPlayer(g, depth=3).play
 
 # nnet players
 
-args1 = dotdict({'numMCTSSims': 100, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False})
+args1 = dotdict({'numMCTSSims': 100, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False, 'use_sym_mcts': True})
 n1 = NNet(g)
 # n1.load_checkpoint('./pretrained_models/othello/pytorch/','8x8_100checkpoints_best.pth.tar')
 n1.load_checkpoint('./models/', 'baseline.pth.tar')
 mcts1 = MCTS(g, n1, args1)
 n1p = lambda x: np.argmax(mcts1.getActionProb(x, temp=0))
 
-args2 = dotdict({'numMCTSSims': 100, 'cpuct': 1.0, 'use_dyn_c': True, 'cmin': 0.8, 'cmax': 1.3, 'addRootNoise': False})
+args2 = dotdict({'numMCTSSims': 100, 'cpuct': 1.0, 'use_dyn_c': True, 'cmin': 0.8, 'cmax': 1.3, 'addRootNoise': False, 'use_sym_mcts': False})
 n2 = NNet(g)
 # n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
 n2.load_checkpoint('./models/', 'baseline.pth.tar')

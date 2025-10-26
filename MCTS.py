@@ -34,6 +34,7 @@ class MCTS():
     def _sym_available(self):
         try:
             return (
+                bool(getattr(self.args, 'use_sym_mcts', False)) and
                 hasattr(self.nnet, 'get_symmetries') and
                 hasattr(self.nnet, 'nnet') and
                 hasattr(self.nnet.nnet, 'perm_back_ext') and
