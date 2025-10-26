@@ -102,6 +102,7 @@ args = dotdict({
     'sym_k': 8,              # number of symmetry views per batch (<=8)
     'sym_strategy': 'cycle', # one of: 'cycle', 'random'
     'amp': False,             # mixed precision training
+    'sym_anchor_stopgrad': True,
 })
 
 
@@ -125,6 +126,9 @@ def main():
         nnet.load_checkpoint(args.load_folder_file[0], args.load_folder_file[1])
     else:
         log.warning('Not loading a checkpoint!')
+    
+    log.info('Loading checkpoint "%s/%s"...', './models', 'sym_iter25.pth.tar')
+    nnet.load_checkpoint('./models', 'sym_iter25.pth.tar')
 
     log.info('Loading the Coach...')
     c = Coach(g, nnet, args)
