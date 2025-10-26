@@ -206,6 +206,21 @@ class MCTS():
             mode = getattr(self.args, 'dyn_c_mode', 'entropy')
             if mode == 'othello':
                 c = self._cpuct_othello(canonicalBoard, s, valids, depth)
+            elif mode == 'entropy':
+                c = self._cpuct_from_entropy(s, valids)
+            elif mode == 'phase':
+                c = self._cpuct_phase(canonicalBoard, s, valids)
+            elif mode == 'visit':
+                c = self._cpuct_visit(s)
+            elif mode == 'mix':
+                # linear mix: c = (1-beta)*phase + beta*visit
+                beta = float(getattr(self.args, 'mix_beta', 0.2))
+                c_phase = self._cpuct_phase(canonicalBoard, s, valids)
+                c_visit = self._cpuct_visit(s)
+                c = (1.0 - beta) * c_phase + beta * c_visit
+                cmin = float(getattr(self.args, 'cmin', 0.5))
+                cmax = float(getattr(self.args, 'cmax', 3.0))
+                c = max(cmin, min(cmax, c))
             else:
                 c = self._cpuct_from_entropy(s, valids)
         else:
@@ -355,4 +370,25 @@ class MCTS():
         tau = float(getattr(self.args, 'othello_depth_tau', 8.0))
         c = base / (1.0 + float(depth) / max(tau, 1e-6))
 
+        return max(cmin, min(cmax, c))
+
+    def _cpuct_phase(self, board, s, valids):
+        # Higher exploration early (more empty squares), lower late
+        n0, n1 = self.game.getBoardSize()
+        n = int(n0)
+        empties = int((board == 0).sum()) if hasattr(board, 'sum') else 0
+        denom = max(n * n - 4, 1)  # initial empties on Othello are n*n-4
+        r = min(1.0, max(0.0, empties / float(denom)))
+        cmin = float(getattr(self.args, 'cmin', 0.5))
+        cmax = float(getattr(self.args, 'cmax', 3.0))
+        c = cmin + (cmax - cmin) * r
+        return max(cmin, min(cmax, c))
+
+    def _cpuct_visit(self, s):
+        # Higher exploration when node is under-explored; decays with Ns[s]
+        Ns = int(self.Ns.get(s, 0))
+        tau_v = float(getattr(self.args, 'visit_tau', 60.0))
+        cmin = float(getattr(self.args, 'cmin', 0.5))
+        cmax = float(getattr(self.args, 'cmax', 3.0))
+        c = cmin + (cmax - cmin) / (1.0 + Ns / max(tau_v, 1e-6))
         return max(cmin, min(cmax, c))
