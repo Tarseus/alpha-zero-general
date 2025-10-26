@@ -3,7 +3,7 @@ from MCTS import MCTS
 from othello.OthelloGame import OthelloGame
 from othello.OthelloPlayers import *
 from othello.pytorch.NNet import NNetWrapper as NNet
-
+import os, random, torch
 
 import numpy as np
 from utils import *
@@ -12,6 +12,17 @@ from utils import *
 use this script to play any two agents against each other, or play manually with
 any agent.
 """
+
+def set_seed(seed: int):
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+set_seed(42)
 
 mini_othello = False  # Play in 6x6 instead of the normal 8x8.
 human_vs_cpu = False
@@ -30,23 +41,23 @@ mp = AlphaBetaOthelloPlayer(g, depth=3).play
 
 # nnet players
 
-args1 = dotdict({'numMCTSSims': 100, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False})
+args1 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False})
 n1 = NNet(g)
 # n1.load_checkpoint('./pretrained_models/othello/pytorch/','8x8_100checkpoints_best.pth.tar')
 n1.load_checkpoint('./models/', 'baseline.pth.tar')
 mcts1 = MCTS(g, n1, args1)
 n1p = lambda x: np.argmax(mcts1.getActionProb(x, temp=0))
 
-args2 = dotdict({'numMCTSSims': 100, 'cpuct': 1.0, 'use_dyn_c': True, 'cmin': 0.8, 'cmax': 1.3, 'addRootNoise': False})
+args2 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': True, 'cmin': 0.8, 'cmax': 1.3, 'othello_depth_tau': 16.0, 'othello_danger_weight': 0.0, 'othello_q_kappa': 1.0, 'dyn_c_mode': "othello", 'addRootNoise': False})
 n2 = NNet(g)
 # n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
 n2.load_checkpoint('./models/', 'baseline.pth.tar')
 mcts2 = MCTS(g, n2, args2)
 n2p = lambda x: np.argmax(mcts2.getActionProb(x, temp=0))
 
-player1 = mp
+player1 = n1p
 
-player2 = n1p
+player2 = n2p
 
 arena = Arena.Arena(player1, player2, g, display=OthelloGame.display)
 

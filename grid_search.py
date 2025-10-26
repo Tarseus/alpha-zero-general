@@ -6,7 +6,7 @@ from MCTS import MCTS
 from othello.OthelloGame import OthelloGame
 from othello.OthelloPlayers import *
 from othello.pytorch.NNet import NNetWrapper as NNet
-
+import os, random, torch
 
 import numpy as np
 from utils import *
@@ -15,6 +15,18 @@ from utils import *
 use this script to play any two agents against each other, or play manually with
 any agent.
 """
+
+def set_seed(seed: int):
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+set_seed(42)
+
 # nohup python grid_search.py --mode othello --cmin-list 0.8,0.9 --cmax-list 1.3,1.5 --tau-list 6,8,12 --danger-list 0.3,0.5,0.7 --kappa-list 0.4,0.5 --games 100 --sims 50 > test.log 2>&1 &
 parser = argparse.ArgumentParser(description="Grid search dynamic exploration params")
 parser.add_argument("--mini", action="store_true", help="Use 6x6 Othello (default 8x8)")
@@ -61,14 +73,6 @@ n1.load_checkpoint('./models/', 'baseline.pth.tar')
 mcts1 = MCTS(g, n1, args1)
 n1p = lambda x: np.argmax(mcts1.getActionProb(x, temp=0))
 
-# args2 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False})
-args2 = dotdict({
-    'numMCTSSims': args_cli.sims,
-    'cpuct': 1.0,
-    'use_dyn_c': True,
-    'cmin': 0.5,
-    'cmax': 3.0,
-})
 n2 = NNet(g)
 # n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
 n2.load_checkpoint('./models/', 'baseline.pth.tar')
