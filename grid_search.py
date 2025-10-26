@@ -32,13 +32,15 @@ parser = argparse.ArgumentParser(description="Grid search dynamic exploration pa
 parser.add_argument("--mini", action="store_true", help="Use 6x6 Othello (default 8x8)")
 parser.add_argument("--games", type=int, default=100, help="Games per configuration")
 parser.add_argument("--sims", type=int, default=50, help="MCTS simulations per move")
-parser.add_argument("--mode", choices=["entropy", "othello"], default="entropy",
+parser.add_argument("--mode", choices=["entropy", "othello", "phase", "visit", "mix"], default="entropy",
                     help="Dynamic c mode to evaluate")
 parser.add_argument("--cmin-list", type=str, default="0.8,0.9,1.0")
 parser.add_argument("--cmax-list", type=str, default="1.2,1.3,1.5")
 parser.add_argument("--tau-list", type=str, default="8", help="othello depth tau list (comma sep)")
 parser.add_argument("--danger-list", type=str, default="0.5", help="othello danger weight list")
 parser.add_argument("--kappa-list", type=str, default="0.5", help="othello q kappa list")
+parser.add_argument("--vtau-list", type=str, default="60", help="visit-decay tau list")
+parser.add_argument("--beta-list", type=str, default="0.2", help="mixing coefficient list for mix mode (phase/visit)")
 args_cli = parser.parse_args()
 
 mini_othello = bool(args_cli.mini)
@@ -89,6 +91,8 @@ cmax_list = parse_float_list(args_cli.cmax_list)
 tau_list = parse_float_list(args_cli.tau_list)
 danger_list = parse_float_list(args_cli.danger_list)
 kappa_list = parse_float_list(args_cli.kappa_list)
+vtau_list = parse_float_list(args_cli.vtau_list)
+beta_list = parse_float_list(args_cli.beta_list)
 num_games = int(args_cli.games)
 
 mode = args_cli.mode
@@ -108,6 +112,11 @@ def run_eval(params):
         a2.othello_depth_tau = params['tau']
         a2.othello_danger_weight = params['danger']
         a2.othello_q_kappa = params['kappa']
+    elif mode == 'visit':
+        a2.visit_tau = params['vtau']
+    elif mode == 'mix':
+        a2.visit_tau = params['vtau']
+        a2.mix_beta = params['beta']
     m2 = MCTS(g, n2, a2)
     p2 = (lambda m: (lambda x: np.argmax(m.getActionProb(x, temp=0))))(m2)
     arena = Arena.Arena(player1, p2, g, display=OthelloGame.display)
@@ -128,7 +137,7 @@ if mode == 'entropy':
             print(f"mode=entropy cmin={cmin}, cmax={cmax} -> {result}, {secs:.2f}s")
             if best is None or score > best[0]:
                 best = (score, params, result, secs)
-else:  # othello
+elif mode == 'othello':
     for cmin in cmin_list:
         for cmax in cmax_list:
             if cmin >= cmax:
@@ -146,6 +155,39 @@ else:  # othello
                         )
                         if best is None or score > best[0]:
                             best = (score, params, result, secs)
+elif mode == 'phase':
+    for cmin in cmin_list:
+        for cmax in cmax_list:
+            if cmin >= cmax:
+                continue
+            params = {'cmin': cmin, 'cmax': cmax}
+            score, result, secs = run_eval(params)
+            print(f"mode=phase cmin={cmin}, cmax={cmax} -> {result}, {secs:.2f}s")
+            if best is None or score > best[0]:
+                best = (score, params, result, secs)
+elif mode == 'visit':
+    for cmin in cmin_list:
+        for cmax in cmax_list:
+            if cmin >= cmax:
+                continue
+            for vtau in vtau_list:
+                params = {'cmin': cmin, 'cmax': cmax, 'vtau': vtau}
+                score, result, secs = run_eval(params)
+                print(f"mode=visit cmin={cmin}, cmax={cmax}, vtau={vtau} -> {result}, {secs:.2f}s")
+                if best is None or score > best[0]:
+                    best = (score, params, result, secs)
+elif mode == 'mix':
+    for cmin in cmin_list:
+        for cmax in cmax_list:
+            if cmin >= cmax:
+                continue
+            for vtau in vtau_list:
+                for beta in beta_list:
+                    params = {'cmin': cmin, 'cmax': cmax, 'vtau': vtau, 'beta': beta}
+                    score, result, secs = run_eval(params)
+                    print(f"mode=mix cmin={cmin}, cmax={cmax}, vtau={vtau}, beta={beta} -> {result}, {secs:.2f}s")
+                    if best is None or score > best[0]:
+                        best = (score, params, result, secs)
 
 if best is not None:
     print(f"BEST mode={mode} params={best[1]} -> {best[2]}, {best[3]:.2f}s")

@@ -2,6 +2,7 @@ import logging
 import math
 
 import numpy as np
+import torch
 
 EPS = 1e-8
 
@@ -26,6 +27,74 @@ class MCTS():
         self.Vs = {}  # stores game.getValidMoves for board s
         # debug: count of masked-all-valids logs to avoid huge files
         self._mask_debug_count = 0
+        # cache for symmetry canonicalization mapping per board string
+        self._sym_cache = {}
+
+    # --- Symmetry-aware helpers (guarded so other games remain unaffected) ---
+    def _sym_available(self):
+        try:
+            return (
+                hasattr(self.nnet, 'get_symmetries') and
+                hasattr(self.nnet, 'nnet') and
+                hasattr(self.nnet.nnet, 'perm_back_ext') and
+                hasattr(self.nnet.nnet, 'perm_fwd_ext')
+            )
+        except Exception:
+            return False
+
+    def _sym_canonicalize(self, board):
+        """Return symmetry-canonical key and action index maps.
+
+        Returns dict with fields:
+          s_key: canonical string key
+          perm_cur2can: np.ndarray[A] mapping current->canonical indices
+          perm_can2cur: np.ndarray[A] mapping canonical->current indices
+          board_can: numpy board (canonical)
+        If symmetry not available, returns identity mappings and original key.
+        """
+        A = self.game.getActionSize()
+        ident = np.arange(A, dtype=np.int64)
+
+        s_orig = self.game.stringRepresentation(board)
+        if not self._sym_available():
+            return {
+                's_key': s_orig,
+                'perm_cur2can': ident,
+                'perm_can2cur': ident,
+                'board_can': board,
+            }
+
+        if s_orig in self._sym_cache:
+            return self._sym_cache[s_orig]
+
+        # prepare on the same device as symmetry buffers
+        device = self.nnet.nnet.perm_back_ext.device
+        b = torch.tensor(np.array(board, dtype=np.float32), device=device).unsqueeze(0)
+        with torch.no_grad():
+            syms = self.nnet.get_symmetries(b)  # (1,S,H,W)
+        syms_np = syms.detach().cpu().numpy()[0]  # (S,H,W)
+
+        # choose canonical (lexicographically minimal string)
+        best_idx = 0
+        best_key = None
+        for t in range(syms_np.shape[0]):
+            key = self.game.stringRepresentation(syms_np[t])
+            if best_key is None or key < best_key:
+                best_key = key
+                best_idx = t
+
+        perm_cur2can = self.nnet.nnet.perm_fwd_ext[best_idx].detach().cpu().numpy()
+        perm_can2cur = self.nnet.nnet.perm_back_ext[best_idx].detach().cpu().numpy()
+        board_can = syms_np[best_idx]
+
+        meta = {
+            's_key': best_key,
+            'perm_cur2can': perm_cur2can,
+            'perm_can2cur': perm_can2cur,
+            'board_can': board_can,
+        }
+        self._sym_cache[s_orig] = meta
+        return meta
 
     def getActionProb(self, canonicalBoard, temp=1):
         """
@@ -37,7 +106,8 @@ class MCTS():
                    proportional to Nsa[(s,a)]**(1./temp)
         """
 
-        s0 = self.game.stringRepresentation(canonicalBoard)
+        meta0 = self._sym_canonicalize(canonicalBoard)
+        s0 = meta0['s_key']
         for i in range(self.args.numMCTSSims):
             self.search(canonicalBoard, depth=0)
 
@@ -55,8 +125,11 @@ class MCTS():
                     P = P / P.sum()
                     self.Ps[s0] = P
 
-        s = self.game.stringRepresentation(canonicalBoard)
-        counts = [self.Nsa[(s, a)] if (s, a) in self.Nsa else 0 for a in range(self.game.getActionSize())]
+        meta = self._sym_canonicalize(canonicalBoard)
+        s = meta['s_key']
+        perm_cur2can = meta['perm_cur2can']
+        A = self.game.getActionSize()
+        counts = [self.Nsa[(s, int(perm_cur2can[a]))] if (s, int(perm_cur2can[a])) in self.Nsa else 0 for a in range(A)]
 
         if temp == 0:
             bestAs = np.array(np.argwhere(counts == np.max(counts))).flatten()
@@ -90,7 +163,10 @@ class MCTS():
             v: the negative of the value of the current canonicalBoard
         """
 
-        s = self.game.stringRepresentation(canonicalBoard)
+        meta = self._sym_canonicalize(canonicalBoard)
+        s = meta['s_key']
+        perm_cur2can = meta['perm_cur2can']
+        perm_can2cur = meta['perm_can2cur']
 
         if s not in self.Es:
             self.Es[s] = self.game.getGameEnded(canonicalBoard, 1)
@@ -125,11 +201,13 @@ class MCTS():
             # v = vs_sym.mean()
             # self.Ps[s] = policy
 
-            # leaf node
-            self.Ps[s], v = self.nnet.predict(canonicalBoard)
-            valids = self.game.getValidMoves(canonicalBoard, 1)
-            P_raw = self.Ps[s].copy()
-            self.Ps[s] = self.Ps[s] * valids  # masking invalid moves
+            # leaf node: evaluate on current orientation and map to canonical orientation
+            P_raw_cur, v = self.nnet.predict(canonicalBoard)
+            valids_cur = self.game.getValidMoves(canonicalBoard, 1)
+            # map: canonical index pulls from current index (perm_can2cur)
+            P_raw = P_raw_cur[perm_can2cur]
+            valids = valids_cur[perm_can2cur]
+            self.Ps[s] = P_raw * valids  # masking invalid moves (canonical)
             sum_Ps_s = np.sum(self.Ps[s])
             if sum_Ps_s > 0:
                 self.Ps[s] /= sum_Ps_s  # renormalize
@@ -206,37 +284,54 @@ class MCTS():
             mode = getattr(self.args, 'dyn_c_mode', 'entropy')
             if mode == 'othello':
                 c = self._cpuct_othello(canonicalBoard, s, valids, depth)
+            elif mode == 'entropy':
+                c = self._cpuct_from_entropy(s, valids)
+            elif mode == 'phase':
+                c = self._cpuct_phase(canonicalBoard, s, valids)
+            elif mode == 'visit':
+                c = self._cpuct_visit(s)
+            elif mode == 'mix':
+                # linear mix: c = (1-beta)*phase + beta*visit
+                beta = float(getattr(self.args, 'mix_beta', 0.2))
+                c_phase = self._cpuct_phase(canonicalBoard, s, valids)
+                c_visit = self._cpuct_visit(s)
+                c = (1.0 - beta) * c_phase + beta * c_visit
+                cmin = float(getattr(self.args, 'cmin', 0.5))
+                cmax = float(getattr(self.args, 'cmax', 3.0))
+                c = max(cmin, min(cmax, c))
             else:
                 c = self._cpuct_from_entropy(s, valids)
         else:
             c = self.args.cpuct
 
-        # pick the action with the highest upper confidence bound
-        for a in range(self.game.getActionSize()):
-            if valids[a]:
-                if (s, a) in self.Qsa:
-                    u = self.Qsa[(s, a)] + c * self.Ps[s][a] * math.sqrt(self.Ns[s]) / (
-                            1 + self.Nsa[(s, a)])
+        # pick the action with the highest upper confidence bound (map actions to canonical)
+        for a_cur in range(self.game.getActionSize()):
+            a_can = int(perm_cur2can[a_cur])
+            if valids[a_can]:
+                if (s, a_can) in self.Qsa:
+                    u = self.Qsa[(s, a_can)] + c * self.Ps[s][a_can] * math.sqrt(self.Ns[s]) / (
+                            1 + self.Nsa[(s, a_can)])
                 else:
-                    u = c * self.Ps[s][a] * math.sqrt(self.Ns[s] + EPS)  # Q = 0 ?
+                    u = c * self.Ps[s][a_can] * math.sqrt(self.Ns[s] + EPS)  # Q = 0 ?
 
                 if u > cur_best:
                     cur_best = u
-                    best_act = a
+                    best_act = a_cur
 
         a = best_act
+        a_can = int(perm_cur2can[a])
         next_s, next_player = self.game.getNextState(canonicalBoard, 1, a)
         next_s = self.game.getCanonicalForm(next_s, next_player)
 
         v = self.search(next_s, depth + 1)
 
-        if (s, a) in self.Qsa:
-            self.Qsa[(s, a)] = (self.Nsa[(s, a)] * self.Qsa[(s, a)] + v) / (self.Nsa[(s, a)] + 1)
-            self.Nsa[(s, a)] += 1
+        if (s, a_can) in self.Qsa:
+            self.Qsa[(s, a_can)] = (self.Nsa[(s, a_can)] * self.Qsa[(s, a_can)] + v) / (self.Nsa[(s, a_can)] + 1)
+            self.Nsa[(s, a_can)] += 1
 
         else:
-            self.Qsa[(s, a)] = v
-            self.Nsa[(s, a)] = 1
+            self.Qsa[(s, a_can)] = v
+            self.Nsa[(s, a_can)] = 1
 
         self.Ns[s] += 1
         return -v
@@ -355,4 +450,25 @@ class MCTS():
         tau = float(getattr(self.args, 'othello_depth_tau', 8.0))
         c = base / (1.0 + float(depth) / max(tau, 1e-6))
 
+        return max(cmin, min(cmax, c))
+
+    def _cpuct_phase(self, board, s, valids):
+        # Higher exploration early (more empty squares), lower late
+        n0, n1 = self.game.getBoardSize()
+        n = int(n0)
+        empties = int((board == 0).sum()) if hasattr(board, 'sum') else 0
+        denom = max(n * n - 4, 1)  # initial empties on Othello are n*n-4
+        r = min(1.0, max(0.0, empties / float(denom)))
+        cmin = float(getattr(self.args, 'cmin', 0.5))
+        cmax = float(getattr(self.args, 'cmax', 3.0))
+        c = cmin + (cmax - cmin) * r
+        return max(cmin, min(cmax, c))
+
+    def _cpuct_visit(self, s):
+        # Higher exploration when node is under-explored; decays with Ns[s]
+        Ns = int(self.Ns.get(s, 0))
+        tau_v = float(getattr(self.args, 'visit_tau', 60.0))
+        cmin = float(getattr(self.args, 'cmin', 0.5))
+        cmax = float(getattr(self.args, 'cmax', 3.0))
+        c = cmin + (cmax - cmin) / (1.0 + Ns / max(tau_v, 1e-6))
         return max(cmin, min(cmax, c))
