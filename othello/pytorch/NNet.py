@@ -27,8 +27,8 @@ class NNetWrapper(NeuralNet):
             'device': 1,
             'num_channels': 512,
 
-            'use_sym': True,
-            'inv_coef': 0.05,
+            'use_sym': False,
+            'inv_coef': 0.0,
             'sym_k': 8,              # number of symmetry views per batch (<=8)
             'sym_strategy': 'cycle', # one of: 'cycle', 'random'
             'amp': False,             # mixed precision training
@@ -59,7 +59,6 @@ class NNetWrapper(NeuralNet):
             self.nnet.train()
             pi_losses = AverageMeter()
             v_losses = AverageMeter()
-            inv_losses = AverageMeter()
 
             batch_count = int(len(examples) / self.args.batch_size)
 
@@ -77,26 +76,6 @@ class NNetWrapper(NeuralNet):
                     target_pis = target_pis.contiguous().cuda(self.args.device)
                     target_vs = target_vs.contiguous().cuda(self.args.device)
 
-                # symmetry subset (encoder invariance only; policy/value use base view)
-                t_idx = None
-                if self.args.use_sym:
-                    k = max(1, min(int(getattr(self.args, 'sym_k', 8)), 8))
-                    t_idx = self._pick_sym_indices(k, getattr(self.args, 'sym_strategy', 'cycle'))
-                    # ensure the identity view is present and is the last view,
-                    # so that out_pi/out_v correspond to the base orientation
-                    # matching targets without action reindexing.
-                    if hasattr(self, '_sym_identity'):
-                        ident = int(self._sym_identity)
-                        # move identity to the end; insert if missing
-                        if ident in t_idx:
-                            t_idx = [t for t in t_idx if t != ident] + [ident]
-                        else:
-                            if len(t_idx) > 0:
-                                t_idx = t_idx[:-1] + [ident]
-                            else:
-                                t_idx = [ident]
-                    boards = self.get_symmetries_subset(boards, t_idx)
-
                 # compute output with AMP
                 scaler = getattr(self, '_scaler', None)
                 if scaler is None:
@@ -104,28 +83,17 @@ class NNetWrapper(NeuralNet):
                     scaler = self._scaler
 
                 with autocast(enabled=(self.args.cuda and bool(getattr(self.args, 'amp', False)))):
-                    out_pi, out_pi_sym, out_v, out_v_sym, out_z_sym = self.nnet(boards)
+                    out_pi, _, out_v, _, _ = self.nnet(boards)
 
-                    # Do NOT use symmetric action/value alignment. We keep only
-                    # encoder invariance auxiliary loss. Policy/value are trained
-                    # against the base (identity) view outputs.
+                    # Train only on base view outputs; no symmetry augmentation
                     l_pi = self.loss_pi(target_pis, out_pi)
                     l_v = self.loss_v(target_vs, out_v)
-
-                    if out_z_sym is not None:
-                        l_inv = self.loss_sym_to_identity(
-                            out_z_sym,
-                            stopgrad=bool(getattr(self.args, 'sym_anchor_stopgrad', True))
-                        )
-                    else:
-                        l_inv = torch.tensor(0, dtype=torch.float32, device=boards.device)
-                    total_loss = l_pi + l_v + self.args.inv_coef * l_inv
+                    total_loss = l_pi + l_v
 
                 # record loss
                 pi_losses.update(l_pi.item(), boards.size(0))
                 v_losses.update(l_v.item(), boards.size(0))
-                inv_losses.update(l_inv.item(), boards.size(0))
-                t.set_postfix(Loss_pi=pi_losses, Loss_v=v_losses, Loss_inv=inv_losses)
+                t.set_postfix(Loss_pi=pi_losses, Loss_v=v_losses)
 
                 # compute gradient and do SGD step
                 optimizer.zero_grad()
