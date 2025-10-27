@@ -24,7 +24,7 @@ class NNetWrapper(NeuralNet):
             'epochs': 10,
             'batch_size': 256,
             'cuda': torch.cuda.is_available(),
-            'device': 1,
+            'device': 0,
             'num_channels': 512,
 
             'use_sym': False,

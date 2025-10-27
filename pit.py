@@ -31,13 +31,19 @@ def make_game(n: int = 8):
     return OthelloGame(n)
 
 
-def make_mcts_player(game, nnet, sims: int, use_sym_mcts: bool):
+def make_mcts_player(game, nnet, sims: int, use_sym_mcts: bool, use_dyn_c: bool = False):
     args = dotdict({
         'numMCTSSims': sims,
         'cpuct': 1.0,
         'use_dyn_c': False,
         'addRootNoise': False,
         'use_sym_mcts': bool(use_sym_mcts),
+        'use_dyn_c': bool(use_dyn_c),
+        'cmin': 0.6,
+        'cmax': 1.3,
+        'dyn_c_mode': 'mix',
+        'visit_tau': 30.0,
+        'mix_beta': 0.1,
     })
     mcts = MCTS(game, nnet, args)
     return lambda x: np.argmax(mcts.getActionProb(x, temp=0))
@@ -70,11 +76,13 @@ def main():
     games = 1000
 
     # 1) baseline/sym_mcts vs random, greedy
-    for label, use_sym in [("baseline", False), ("sym_mcts", True)]:
-        for sims in [25, 50]:
-            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym)
-            run_matchup(f"{label} vs random (sims={sims})", p_mcts, rp, g, games)
-            run_matchup(f"{label} vs greedy (sims={sims})", p_mcts, gp, g, games)
+    # for label, use_sym in [("baseline", False), ("sym_mcts", True)]:
+    label = "baseline"
+    use_sym = False
+    for sims in [25, 50]:
+        p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym)
+        run_matchup(f"{label} vs random (sims={sims})", p_mcts, rp, g, games)
+        run_matchup(f"{label} vs greedy (sims={sims})", p_mcts, gp, g, games)
 
     # 2) baseline/sym_mcts vs alphabeta
     for label, use_sym in [("baseline", False), ("sym_mcts", True)]:
