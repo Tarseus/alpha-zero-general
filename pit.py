@@ -31,19 +31,17 @@ def make_game(n: int = 8):
     return OthelloGame(n)
 
 
-def make_mcts_player(game, nnet, sims: int, use_sym_mcts: bool, use_dyn_c: bool = False):
+def make_mcts_player(game, nnet, sims: int, use_sym_mcts: bool, use_dyn_c: bool = False,
+                     dyn_mode: str = 'entropy', cmin: float = 0.8, cmax: float = 1.3):
     args = dotdict({
         'numMCTSSims': sims,
         'cpuct': 1.0,
-        'use_dyn_c': False,
+        'use_dyn_c': bool(use_dyn_c),
+        'dyn_c_mode': dyn_mode,
+        'cmin': cmin,
+        'cmax': cmax,
         'addRootNoise': False,
         'use_sym_mcts': bool(use_sym_mcts),
-        'use_dyn_c': bool(use_dyn_c),
-        'cmin': 0.6,
-        'cmax': 1.3,
-        'dyn_c_mode': 'mix',
-        'visit_tau': 30.0,
-        'mix_beta': 0.1,
     })
     mcts = MCTS(game, nnet, args)
     return lambda x: np.argmax(mcts.getActionProb(x, temp=0))
@@ -84,17 +82,35 @@ def main():
         run_matchup(f"{label} vs random (sims={sims})", p_mcts, rp, g, games)
         run_matchup(f"{label} vs greedy (sims={sims})", p_mcts, gp, g, games)
 
-    # 2) baseline/sym_mcts vs alphabeta
-    for label, use_sym in [("baseline", False), ("sym_mcts", True)]:
-        for sims in [25, 50, 75, 100]:
-            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym)
+    # 2) vs alphabeta: test four configurations
+    #    - baseline (dyn=False, sym=False)
+    #    - dyn only (dyn=True, sym=False)
+    #    - sym only (dyn=False, sym=True)
+    #    - dyn+sym (dyn=True, sym=True)
+    for sims in [25, 50, 75, 100]:
+        cfgs = [
+            ("baseline", False, False),
+            ("dyn_only", True, False),
+            ("sym_only", False, True),
+            ("dyn_sym", True, True),
+        ]
+        for label, use_dyn, use_sym in cfgs:
+            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym, use_dyn_c=use_dyn,
+                                      dyn_mode='entropy', cmin=0.8, cmax=1.3)
             run_matchup(f"{label} vs alphabeta(d=3) (sims={sims})", p_mcts, mp, g, games)
 
-    # 3) baseline vs sym_mcts (ensure equal sims on both sides)
+    # 3) baseline vs variants (ensure equal sims on both sides): dyn_only, sym_only, dyn_sym
     for sims in [25, 50, 75, 100]:
-        p_base = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False)
-        p_sym = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True)
-        run_matchup(f"baseline vs sym_mcts (sims={sims})", p_base, p_sym, g, games)
+        p_base = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=False)
+        opponents = [
+            ("dyn_only", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=True,
+                                           dyn_mode='entropy', cmin=0.8, cmax=1.3)),
+            ("sym_only", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True, use_dyn_c=False)),
+            ("dyn_sym",  make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True, use_dyn_c=True,
+                                           dyn_mode='entropy', cmin=0.8, cmax=1.3)),
+        ]
+        for label, p_var in opponents:
+            run_matchup(f"baseline vs {label} (sims={sims})", p_base, p_var, g, games)
 
 
 if __name__ == "__main__":

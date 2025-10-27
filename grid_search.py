@@ -68,12 +68,9 @@ mp = AlphaBetaOthelloPlayer(g, depth=3).play
 #     'cmax': 3.0,
 #     'kc': 3.0,})
 
-args1 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False})
 n1 = NNet(g)
 # n1.load_checkpoint('./pretrained_models/othello/pytorch/','8x8_100checkpoints_best.pth.tar')
 n1.load_checkpoint('./models/', 'baseline.pth.tar')
-mcts1 = MCTS(g, n1, args1)
-n1p = lambda x: np.argmax(mcts1.getActionProb(x, temp=0))
 
 n2 = NNet(g)
 # n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
@@ -117,9 +114,18 @@ def run_eval(params):
     elif mode == 'mix':
         a2.visit_tau = params['vtau']
         a2.mix_beta = params['beta']
+    # Rebuild baseline (player1) MCTS for every evaluation to avoid tree reuse
+    a1 = dotdict({
+        'numMCTSSims': args_cli.sims,
+        'cpuct': 1.0,
+        'use_dyn_c': False,
+    })
+    m1 = MCTS(g, n1, a1)
+    p1 = (lambda m: (lambda x: np.argmax(m.getActionProb(x, temp=0))))(m1)
+
     m2 = MCTS(g, n2, a2)
     p2 = (lambda m: (lambda x: np.argmax(m.getActionProb(x, temp=0))))(m2)
-    arena = Arena.Arena(player1, p2, g, display=OthelloGame.display)
+    arena = Arena.Arena(p1, p2, g, display=OthelloGame.display)
     start = time.time()
     result = arena.playGames(num_games, verbose=False)
     secs = time.time() - start
