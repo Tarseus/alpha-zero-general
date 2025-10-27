@@ -1,3 +1,4 @@
+import time
 import Arena
 from MCTS import MCTS
 from othello.OthelloGame import OthelloGame
@@ -9,67 +10,84 @@ import numpy as np
 from utils import *
 
 """
-use this script to play any two agents against each other, or play manually with
-any agent.
+This script now runs a fixed battery of matches:
+- baseline (no dyn_c, no sym_mcts) vs random/greedy/alphabeta
+- sym_mcts (no dyn_c, use_sym_mcts) vs random/greedy/alphabeta
+  sims: random/greedy -> 25, 50; alphabeta -> 25, 50, 75, 100
+- baseline vs sym_mcts with equal sims: 25, 50, 75, 100
+Each matchup runs 1000 games (500 as each color via Arena.playGames).
 """
+
 
 def set_seed(seed: int):
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
-
     np.random.seed(seed)
-
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-set_seed(42)
 
-mini_othello = False  # Play in 6x6 instead of the normal 8x8.
-human_vs_cpu = False
-
-if mini_othello:
-    g = OthelloGame(6)
-else:
-    g = OthelloGame(8)
-
-# all players
-rp = RandomPlayer(g).play
-gp = GreedyOthelloPlayer(g).play
-hp = HumanOthelloPlayer(g).play
-mp = AlphaBetaOthelloPlayer(g, depth=3).play
+def make_game(n: int = 8):
+    return OthelloGame(n)
 
 
-# nnet players
+def make_mcts_player(game, nnet, sims: int, use_sym_mcts: bool):
+    args = dotdict({
+        'numMCTSSims': sims,
+        'cpuct': 1.0,
+        'use_dyn_c': False,
+        'addRootNoise': False,
+        'use_sym_mcts': bool(use_sym_mcts),
+    })
+    mcts = MCTS(game, nnet, args)
+    return lambda x: np.argmax(mcts.getActionProb(x, temp=0))
 
-args1 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False, 'use_sym_mcts': True})
-n1 = NNet(g)
-# n1.load_checkpoint('./pretrained_models/othello/pytorch/','8x8_100checkpoints_best.pth.tar')
-n1.load_checkpoint('./models/', 'baseline.pth.tar')
-mcts1 = MCTS(g, n1, args1)
-n1p = lambda x: np.argmax(mcts1.getActionProb(x, temp=0))
 
-args2 = dotdict({'numMCTSSims': 100, 'cpuct': 1.0, 'use_dyn_c': True, 'cmin': 0.8, 'cmax': 1.3, 'addRootNoise': False, 'use_sym_mcts': False})
-n2 = NNet(g)
-# n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
-n2.load_checkpoint('./models/', 'baseline.pth.tar')
-mcts2 = MCTS(g, n2, args2)
-n2p = lambda x: np.argmax(mcts2.getActionProb(x, temp=0))
+def run_matchup(label: str, p1, p2, game, games: int = 1000, verbose: bool = False):
+    arena = Arena.Arena(p1, p2, game, display=OthelloGame.display)
+    start = time.time()
+    result = arena.playGames(games, verbose=verbose)
+    secs = time.time() - start
+    oneWon, twoWon, draws = result
+    print(f"{label}: result={result}, time={secs:.2f}s")
+    return result
 
-player1 = n1p
 
-player2 = n2p
+def main():
+    set_seed(42)
 
-arena = Arena.Arena(player1, player2, g, display=OthelloGame.display)
+    g = make_game(8)
 
-start = time.time()
-result = arena.playGames(100, verbose=False)
-game_time = time.time() - start
+    # Opponents
+    rp = RandomPlayer(g).play
+    gp = GreedyOthelloPlayer(g).play
+    mp = AlphaBetaOthelloPlayer(g, depth=3).play
 
-print(result, game_time)
+    # Shared network (baseline weights)
+    nnet = NNet(g)
+    nnet.load_checkpoint('./models/', 'baseline.pth.tar')
 
-# base-dyn: (38, 62, 0) mcts=50
-# random-dyn: (0, 100, 0)
-# greedy-dyn: (0, 100, 0)
-# AlphaBeta(d=3)-base: (39, 61, 0) 962.8510503768921 mcts=50
-# AlphaBeta(d=3)-base: (38, 62, 0) 1049.8993735313416 mcts=75
-# AlphaBeta(d=3)-base: (29, 71, 0) 1325.0332896709442 mcts=100
+    games = 1000
+
+    # 1) baseline/sym_mcts vs random, greedy
+    for label, use_sym in [("baseline", False), ("sym_mcts", True)]:
+        for sims in [25, 50]:
+            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym)
+            run_matchup(f"{label} vs random (sims={sims})", p_mcts, rp, g, games)
+            run_matchup(f"{label} vs greedy (sims={sims})", p_mcts, gp, g, games)
+
+    # 2) baseline/sym_mcts vs alphabeta
+    for label, use_sym in [("baseline", False), ("sym_mcts", True)]:
+        for sims in [25, 50, 75, 100]:
+            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym)
+            run_matchup(f"{label} vs alphabeta(d=3) (sims={sims})", p_mcts, mp, g, games)
+
+    # 3) baseline vs sym_mcts (ensure equal sims on both sides)
+    for sims in [25, 50, 75, 100]:
+        p_base = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False)
+        p_sym = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True)
+        run_matchup(f"baseline vs sym_mcts (sims={sims})", p_base, p_sym, g, games)
+
+
+if __name__ == "__main__":
+    main()
