@@ -115,6 +115,10 @@ args = dotdict({
     'reanalyze_v_lambda': 0.0,   # 0.0 means keep terminal z for value
     'reanalyze_fraction': 1.0,   # 1.0 means reanalyze all samples
     'reanalyze_cache': True,
+    'reanalyze_progress': 'auto',   # 'auto'|'tqdm'|'log'|'none'
+    'reanalyze_log_interval_sec': 60.0,
+    'reanalyze_max_unique': 0,      # 0 means no cap
+    'reanalyze_shuffle': True,
 })
 
 
