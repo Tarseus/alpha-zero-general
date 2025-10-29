@@ -62,6 +62,9 @@ class NNetWrapper(NeuralNet):
             self.nnet.train()
             pi_losses = AverageMeter()
             v_losses = AverageMeter()
+            total_losses = AverageMeter()
+            kl_losses = AverageMeter()
+            cons_v_losses = AverageMeter()
 
             batch_count = int(len(examples) / self.args.batch_size)
 
@@ -107,18 +110,45 @@ class NNetWrapper(NeuralNet):
                         # KL(student||teacher): input is log-prob, target is prob
                         consis_pi_coef = float(getattr(self.args, 'consis_pi_coef', 0.05))
                         consis_v_coef = float(getattr(self.args, 'consis_v_coef', 0.01))
+                        cur_kl = None
+                        cur_cv = None
                         if consis_pi_coef > 0.0:
                             t_pi_prob = torch.exp(t_pi_logits)
                             kl = F.kl_div(out_pi, t_pi_prob, reduction='batchmean')
                             total_loss = total_loss + consis_pi_coef * kl
+                            cur_kl = kl
                         if consis_v_coef > 0.0:
                             mse_v = F.mse_loss(out_v.view(-1), t_v.view(-1))
                             total_loss = total_loss + consis_v_coef * mse_v
+                            cur_cv = mse_v
 
                 # record loss
-                pi_losses.update(l_pi.item(), boards.size(0))
-                v_losses.update(l_v.item(), boards.size(0))
-                t.set_postfix(Loss_pi=pi_losses, Loss_v=v_losses)
+                bs = boards.size(0)
+                pi_losses.update(l_pi.item(), bs)
+                v_losses.update(l_v.item(), bs)
+                total_losses.update(total_loss.item(), bs)
+                # optional metrics
+                if 'cur_kl' in locals() and cur_kl is not None:
+                    kl_losses.update(cur_kl.item(), bs)
+                if 'cur_cv' in locals() and cur_cv is not None:
+                    cons_v_losses.update(cur_cv.item(), bs)
+                # update tqdm postfix with compact metrics
+                try:
+                    lr = optimizer.param_groups[0].get('lr', None)
+                except Exception:
+                    lr = None
+                postfix = {
+                    'L_pi': f"{pi_losses.avg:.3e}",
+                    'L_v': f"{v_losses.avg:.3e}",
+                    'L_tot': f"{total_losses.avg:.3e}",
+                }
+                if kl_losses.count > 0:
+                    postfix['KL'] = f"{kl_losses.avg:.3e}"
+                if cons_v_losses.count > 0:
+                    postfix['ConsV'] = f"{cons_v_losses.avg:.3e}"
+                if lr is not None:
+                    postfix['LR'] = f"{lr:.2e}"
+                t.set_postfix(**postfix)
 
                 # compute gradient and do SGD step
                 optimizer.zero_grad()
