@@ -240,14 +240,15 @@ class Coach():
             rep_board_can = bundle['rep_board_can']
 
             # Check if any item in the group passes the fraction gate
-            need_re = any(_rnd.random() <= frac for _ in bundle['items'])
+            apply_flags = [(_rnd.random() <= frac) for _ in bundle['items']]
+            need_re = any(apply_flags)
             if not need_re:
                 processed += 1
                 if not use_tqdm and _time.time() >= next_log:
                     elapsed = _time.time() - t0
                     done = processed / max(total_unique, 1)
                     eta = elapsed * (1.0 - done) / max(done, 1e-8)
-                    print(f"[Reanalyze] unique {processed}/{total_unique} ({done*100:.1f}%), applied {applied_samples}/{total_samples} ({(applied_samples/max(total_samples,1))*100:.1f}%), cache_hit {cache_hits}/{lookups} ({(cache_hits/max(lookups,1))*100:.1f}%), elapsed {elapsed/60:.1f}m, eta {eta/60:.1f}m")
+                    print(f"[Reanalyze] unique {processed}/{total_unique} ({done*100:.1f}%), applied {applied_samples}/{total_samples} ({(applied_samples/max(total_samples,1))*100:.1f}%), cache_hit {cache_hits}/{lookups} ({(cache_hits/max(lookups,1))*100:.1f}%), elapsed {elapsed/60:.1f}m, eta {eta/60:.1f}m", flush=True)
                     next_log = _time.time() + log_interval
                 continue
 
@@ -282,9 +283,10 @@ class Coach():
                     cache[s_key] = (pi_can, v_root)
 
             # Apply to each item in this group
-            for (idx, board, pi, z, meta) in bundle['items']:
-                if _rnd.random() > frac:
+            for (flag, item) in zip(apply_flags, bundle['items']):
+                if not flag:
                     continue
+                (idx, board, pi, z, meta) = item
                 perm_cur2can = meta['perm_cur2can']
                 pi_new_np = np.array(pi_can, dtype=np.float32)[perm_cur2can]
                 pi_np = np.array(pi, dtype=np.float32)
@@ -315,7 +317,7 @@ class Coach():
                     elapsed = _time.time() - t0
                     done = processed / max(total_unique, 1)
                     eta = elapsed * (1.0 - done) / max(done, 1e-8)
-                    print(f"[Reanalyze] unique {processed}/{total_unique} ({done*100:.1f}%), applied {applied_samples}/{total_samples} ({(applied_samples/max(total_samples,1))*100:.1f}%), cache_hit {cache_hits}/{lookups} ({(cache_hits/max(lookups,1))*100:.1f}%), elapsed {elapsed/60:.1f}m, eta {eta/60:.1f}m")
+                    print(f"[Reanalyze] unique {processed}/{total_unique} ({done*100:.1f}%), applied {applied_samples}/{total_samples} ({(applied_samples/max(total_samples,1))*100:.1f}%), cache_hit {cache_hits}/{lookups} ({(cache_hits/max(lookups,1))*100:.1f}%), elapsed {elapsed/60:.1f}m, eta {eta/60:.1f}m", flush=True)
                     next_log = _time.time() + log_interval
 
         return new_examples
