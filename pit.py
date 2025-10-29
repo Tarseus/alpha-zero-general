@@ -25,21 +25,24 @@ def set_seed(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def make_game(n: int = 8):
     return OthelloGame(n)
 
 
-def make_mcts_player(game, nnet, sims: int, use_sym_mcts: bool, use_dyn_c: bool = False,
-                     dyn_mode: str = 'entropy', cmin: float = 0.8, cmax: float = 1.3):
+def make_mcts_player(game, nnet, sims: int, use_sym_mcts: bool, use_dyn_c: bool = False,):
     args = dotdict({
         'numMCTSSims': sims,
         'cpuct': 1.0,
         'use_dyn_c': bool(use_dyn_c),
-        'dyn_c_mode': dyn_mode,
-        'cmin': cmin,
-        'cmax': cmax,
+        'dyn_c_mode': "mix",
+        'cmin': 0.6,
+        'cmax': 1.3,
+        'visit_tau': 30,
+        'mix_beta': 0.4,
         'addRootNoise': False,
         'use_sym_mcts': bool(use_sym_mcts),
     })
@@ -71,23 +74,10 @@ def main():
     nnet = NNet(g)
     nnet.load_checkpoint('./models/', 'baseline.pth.tar')
 
-    games = 1000
+    games = 100
 
     # 1) baseline/sym_mcts vs random, greedy
-    # for label, use_sym in [("baseline", False), ("sym_mcts", True)]:
-    label = "baseline"
-    use_sym = False
-    for sims in [25, 50]:
-        p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym)
-        run_matchup(f"{label} vs random (sims={sims})", p_mcts, rp, g, games)
-        run_matchup(f"{label} vs greedy (sims={sims})", p_mcts, gp, g, games)
-
-    # 2) vs alphabeta: test four configurations
-    #    - baseline (dyn=False, sym=False)
-    #    - dyn only (dyn=True, sym=False)
-    #    - sym only (dyn=False, sym=True)
-    #    - dyn+sym (dyn=True, sym=True)
-    for sims in [25, 50, 75, 100]:
+    for sims in [50,100,200,400]:
         cfgs = [
             ("baseline", False, False),
             ("dyn_only", True, False),
@@ -95,19 +85,34 @@ def main():
             ("dyn_sym", True, True),
         ]
         for label, use_dyn, use_sym in cfgs:
-            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym, use_dyn_c=use_dyn,
-                                      dyn_mode='entropy', cmin=0.8, cmax=1.3)
+            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym, use_dyn_c=use_dyn)
+            run_matchup(f"{label} vs random (sims={sims})", p_mcts, rp, g, games)
+            run_matchup(f"{label} vs greedy (sims={sims})", p_mcts, gp, g, games)
+
+    # 2) vs alphabeta: test four configurations
+    #    - baseline (dyn=False, sym=False)
+    #    - dyn only (dyn=True, sym=False)
+    #    - sym only (dyn=False, sym=True)
+    #    - dyn+sym (dyn=True, sym=True)
+    for sims in [50,100,200,400]:
+        cfgs = [
+            ("baseline", False, False),
+            ("dyn_only", True, False),
+            ("sym_only", False, True),
+            ("dyn_sym", True, True),
+        ]
+        for label, use_dyn, use_sym in cfgs:
+            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym, use_dyn_c=use_dyn)
             run_matchup(f"{label} vs alphabeta(d=3) (sims={sims})", p_mcts, mp, g, games)
 
     # 3) baseline vs variants (ensure equal sims on both sides): dyn_only, sym_only, dyn_sym
-    for sims in [25, 50, 75, 100]:
+    for sims in [50,100,200,400]:
         p_base = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=False)
         opponents = [
-            ("dyn_only", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=True,
-                                           dyn_mode='entropy', cmin=0.8, cmax=1.3)),
+            ("baseline", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=False)),
+            ("dyn_only", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=True)),
             ("sym_only", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True, use_dyn_c=False)),
-            ("dyn_sym",  make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True, use_dyn_c=True,
-                                           dyn_mode='entropy', cmin=0.8, cmax=1.3)),
+            ("dyn_sym",  make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True, use_dyn_c=True)),
         ]
         for label, p_var in opponents:
             run_matchup(f"baseline vs {label} (sims={sims})", p_base, p_var, g, games)

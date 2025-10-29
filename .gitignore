@@ -13,7 +13,6 @@ checkpoints/
 
 *.log
 *.pid
-*.out
 /real_alphaGoZero/
 /diy/
 

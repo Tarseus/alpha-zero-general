@@ -25,6 +25,9 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 set_seed(42)
 
 # nohup python grid_search.py --mode othello --cmin-list 0.8,0.9 --cmax-list 1.3,1.5 --tau-list 6,8,12 --danger-list 0.3,0.5,0.7 --kappa-list 0.4,0.5 --games 100 --sims 50 > test.log 2>&1 &
@@ -75,7 +78,6 @@ n1.load_checkpoint('./models/', 'baseline.pth.tar')
 n2 = NNet(g)
 # n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
 n2.load_checkpoint('./models/', 'baseline.pth.tar')
-player1 = n1p
 #
 # Grid search for dynamic c parameters
 # Keeps player1 static; loops player2 with dynamic c.
