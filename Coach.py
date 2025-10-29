@@ -114,6 +114,10 @@ class Coach():
             self.pnet.load_checkpoint(folder=self.args.checkpoint, filename='temp.pth.tar')
             pmcts = MCTS(self.game, self.pnet, self.args)
 
+            # Reanalyze: recompute stronger policy targets with frozen teacher (pnet)
+            if bool(getattr(self.args, 'reanalyze_enable', False)) and len(trainExamples) > 0:
+                trainExamples = self._reanalyze_examples(trainExamples, teacher=self.pnet)
+
             self.nnet.train(trainExamples)
             nmcts = MCTS(self.game, self.nnet, self.args)
 
@@ -162,6 +166,87 @@ class Coach():
 
             # examples based on the model were already collected (loaded)
             self.skipFirstSelfPlay = True
+
+    def _reanalyze_examples(self, examples, teacher):
+        """Recompute policy targets with a stronger teacher MCTS.
+
+        examples: list[(board, pi, z)] with canonical boards
+        teacher: NNetWrapper-compatible net (frozen)
+        """
+        # Build teacher MCTS args
+        import copy as _cpy
+        args_re = _cpy.deepcopy(self.args)
+        sims_mult = float(getattr(self.args, 'reanalyze_sims_mult', 4.0))
+        args_re.numMCTSSims = max(1, int(self.args.numMCTSSims * sims_mult))
+        # Ensure deterministic strong target at root
+        setattr(args_re, 'addRootNoise', False)
+        # If available, enable symmetry ensembling at leaf evaluation
+        setattr(args_re, 'sym_eval', True)
+
+        mcts_t = MCTS(self.game, teacher, args_re)
+        alpha = float(getattr(self.args, 'reanalyze_pi_alpha', 1.0))
+        lam_v = float(getattr(self.args, 'reanalyze_v_lambda', 0.0))
+        frac = float(getattr(self.args, 'reanalyze_fraction', 1.0))
+        use_cache = bool(getattr(self.args, 'reanalyze_cache', True))
+
+        cache = {}
+        A = self.game.getActionSize()
+
+        new_examples = []
+        for (board, pi, z) in examples:
+            do_re = (np.random.rand() <= frac)
+            if not do_re:
+                new_examples.append((board, pi, z))
+                continue
+            # cache by canonical board string
+            key = self.game.stringRepresentation(board)
+            if use_cache and key in cache:
+                pi_new, v_root = cache[key]
+            else:
+                # strong search at root
+                pi_new = mcts_t.getActionProb(board, temp=0)
+                # optional root value estimated from edge stats
+                v_root = None
+                if lam_v > 0.0:
+                    try:
+                        meta = mcts_t._sym_canonicalize(board)
+                        s = meta['s_key']
+                        num = 0.0
+                        den = 0.0
+                        for a in range(A):
+                            key_sa = (s, a)
+                            if key_sa in mcts_t.Nsa:
+                                nsa = float(mcts_t.Nsa[key_sa])
+                                qsa = float(mcts_t.Qsa.get(key_sa, 0.0))
+                                num += nsa * qsa
+                                den += nsa
+                        if den > 0.0:
+                            v_root = num / den
+                    except Exception:
+                        v_root = None
+                if use_cache:
+                    cache[key] = (pi_new, v_root)
+
+            # mix policy and value targets
+            pi_np = np.array(pi, dtype=np.float32)
+            pi_new_np = np.array(pi_new, dtype=np.float32)
+            if alpha >= 1.0:
+                pi_star = pi_new_np
+            elif alpha <= 0.0:
+                pi_star = pi_np
+            else:
+                pi_star = (1.0 - alpha) * pi_np + alpha * pi_new_np
+                # re-normalize to avoid drift
+                s = float(pi_star.sum())
+                if s > 0:
+                    pi_star = pi_star / s
+            if v_root is not None and lam_v > 0.0:
+                v_star = float((1.0 - lam_v) * float(z) + lam_v * float(v_root))
+            else:
+                v_star = z
+            new_examples.append((board, pi_star, v_star))
+
+        return new_examples
 
     def _mcts_player_with(self, nnet, sims):
         eval_args = copy.deepcopy(self.args)

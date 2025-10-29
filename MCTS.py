@@ -202,8 +202,31 @@ class MCTS():
             # v = vs_sym.mean()
             # self.Ps[s] = policy
 
-            # leaf node: evaluate on current orientation and map to canonical orientation
-            P_raw_cur, v = self.nnet.predict(canonicalBoard)
+            # leaf node: evaluate on current orientation (optionally with symmetry ensembling)
+            use_sym_ens = bool(getattr(self.args, 'sym_eval', False))
+            can_ens = hasattr(self.nnet, 'nnet') and hasattr(self.nnet.nnet, 'perm_back_ext')
+            P_raw_cur = None
+            v = None
+            if use_sym_ens and can_ens:
+                try:
+                    # Build 8 symmetric boards and evaluate as a batch
+                    device = self.nnet.nnet.perm_back_ext.device
+                    b = torch.tensor(np.array(canonicalBoard, dtype=np.float32), device=device).unsqueeze(0)
+                    syms = self.nnet.get_symmetries(b)  # (1, S, n, n)
+                    S = int(syms.size(1))
+                    boards_sym = syms[0].detach().cpu().numpy()  # (S, n, n)
+                    pis_sym, vs_sym = self.nnet.predict(boards_sym)  # (S, A), (S,)
+                    # map each symmetric policy back to current orientation via perm_back_ext
+                    perm_back = self.nnet.nnet.perm_back_ext.detach().cpu().numpy()  # (S, A+1)
+                    A = self.game.getActionSize()
+                    P_back = np.stack([pis_sym[t][perm_back[t][:A]] for t in range(S)], axis=0)  # (S, A)
+                    P_raw_cur = P_back.mean(axis=0)
+                    v = float(np.mean(vs_sym))
+                except Exception:
+                    # Fallback to single-view predict if anything goes wrong
+                    P_raw_cur, v = self.nnet.predict(canonicalBoard)
+            else:
+                P_raw_cur, v = self.nnet.predict(canonicalBoard)
             valids_cur = self.game.getValidMoves(canonicalBoard, 1)
             # map: canonical index pulls from current index (perm_can2cur)
             P_raw = P_raw_cur[perm_can2cur]

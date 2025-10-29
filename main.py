@@ -103,6 +103,18 @@ args = dotdict({
     'sym_strategy': 'cycle', # one of: 'cycle', 'random'
     'amp': False,             # mixed precision training
     'sym_anchor_stopgrad': True,
+    # EMA teacher + consistency regularization
+    'ema_enable': True,
+    'ema_decay': 0.999,
+    'consis_pi_coef': 0.05,
+    'consis_v_coef': 0.01,
+    # Reanalyze (offline target recomputation)
+    'reanalyze_enable': True,
+    'reanalyze_sims_mult': 4.0,
+    'reanalyze_pi_alpha': 1.0,   # 1.0 means replace policy with pi'
+    'reanalyze_v_lambda': 0.0,   # 0.0 means keep terminal z for value
+    'reanalyze_fraction': 1.0,   # 1.0 means reanalyze all samples
+    'reanalyze_cache': True,
 })
 
 

@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import copy
 
 import numpy as np
 import math
@@ -47,6 +48,8 @@ class NNetWrapper(NeuralNet):
         if self.args.cuda:
             self.nnet.cuda(self.args.device)
             torch.backends.cudnn.benchmark = True
+        # EMA teacher placeholder
+        self._ema_teacher = None
 
     def train(self, examples):
         """
@@ -90,6 +93,28 @@ class NNetWrapper(NeuralNet):
                     l_v = self.loss_v(target_vs, out_v)
                     total_loss = l_pi + l_v
 
+                    # EMA Teacher consistency losses (optional)
+                    if bool(getattr(self.args, 'ema_enable', False)):
+                        # init teacher if needed
+                        if self._ema_teacher is None:
+                            self._ema_teacher = copy.deepcopy(self.nnet).eval()
+                            if self.args.cuda:
+                                self._ema_teacher.cuda(self.args.device)
+                            for p in self._ema_teacher.parameters():
+                                p.requires_grad_(False)
+                        with torch.no_grad():
+                            t_pi_logits, _, t_v, _, _ = self._ema_teacher(boards)
+                        # KL(student||teacher): input is log-prob, target is prob
+                        consis_pi_coef = float(getattr(self.args, 'consis_pi_coef', 0.05))
+                        consis_v_coef = float(getattr(self.args, 'consis_v_coef', 0.01))
+                        if consis_pi_coef > 0.0:
+                            t_pi_prob = torch.exp(t_pi_logits)
+                            kl = F.kl_div(out_pi, t_pi_prob, reduction='batchmean')
+                            total_loss = total_loss + consis_pi_coef * kl
+                        if consis_v_coef > 0.0:
+                            mse_v = F.mse_loss(out_v.view(-1), t_v.view(-1))
+                            total_loss = total_loss + consis_v_coef * mse_v
+
                 # record loss
                 pi_losses.update(l_pi.item(), boards.size(0))
                 v_losses.update(l_v.item(), boards.size(0))
@@ -104,6 +129,13 @@ class NNetWrapper(NeuralNet):
                 else:
                     total_loss.backward()
                     optimizer.step()
+
+                # EMA update after student step
+                if bool(getattr(self.args, 'ema_enable', False)) and (self._ema_teacher is not None):
+                    with torch.no_grad():
+                        m = float(getattr(self.args, 'ema_decay', 0.999))
+                        for p_t, p_s in zip(self._ema_teacher.parameters(), self.nnet.parameters()):
+                            p_t.data.mul_(m).add_(p_s.data, alpha=(1.0 - m))
 
     def predict(self, board):
         """
