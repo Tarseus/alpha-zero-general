@@ -27,14 +27,14 @@ gp = GreedyOthelloPlayer(g).play
 hp = HumanOthelloPlayer(g).play
 mp = AlphaBetaOthelloPlayer(g, depth=3).play
 # nnet players
-args1 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False})
+args1 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False, 'sym_eval': True})
 n1 = NNet(g)
 # n1.load_checkpoint('./pretrained_models/othello/pytorch/','8x8_100checkpoints_best.pth.tar')
-n1.load_checkpoint('./models/', 'sym.pth.tar')
+n1.load_checkpoint('./models/', 'best60.pth.tar')
 mcts1 = MCTS(g, n1, args1)
 n1p = lambda x: np.argmax(mcts1.getActionProb(x, temp=0))
 
-args2 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False})
+args2 = dotdict({'numMCTSSims': 50, 'cpuct': 1.0, 'use_dyn_c': False, 'addRootNoise': False, 'sym_eval': True})
 n2 = NNet(g)
 # n2.load_checkpoint('./pretrained_models/othello/pytorch/', '8x8_100checkpoints_best.pth.tar')
 n2.load_checkpoint('./models/', 'baseline.pth.tar')
@@ -48,7 +48,7 @@ player2 = n2p
 arena = Arena.Arena(player1, player2, g, display=OthelloGame.display)
 
 start = time.time()
-result = arena.playGames(100, verbose=False)
+result = arena.playGames(200, verbose=False)
 game_time = time.time() - start
 
 print(result, game_time)

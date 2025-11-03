@@ -33,18 +33,13 @@ def make_game(n: int = 8):
     return OthelloGame(n)
 
 
-def make_mcts_player(game, nnet, sims: int, use_sym_mcts: bool, use_dyn_c: bool = False,):
+def make_mcts_player(game, nnet, sims: int,):
     args = dotdict({
         'numMCTSSims': sims,
-        'cpuct': 1.0,
-        'use_dyn_c': bool(use_dyn_c),
-        'dyn_c_mode': "mix",
-        'cmin': 0.6,
-        'cmax': 1.3,
-        'visit_tau': 30,
-        'mix_beta': 0.4,
-        'addRootNoise': False,
-        'use_sym_mcts': bool(use_sym_mcts),
+        'cpuct': 1.0, 
+        'use_dyn_c': False, 
+        'addRootNoise': False, 
+        'sym_eval': True,
     })
     mcts = MCTS(game, nnet, args)
     return lambda x: np.argmax(mcts.getActionProb(x, temp=0))
@@ -71,21 +66,22 @@ def main():
     mp = AlphaBetaOthelloPlayer(g, depth=3).play
 
     # Shared network (baseline weights)
-    nnet = NNet(g)
-    nnet.load_checkpoint('./models/', 'baseline.pth.tar')
+    nnet_base = NNet(g)
+    nnet_base.load_checkpoint('./models/', 'baseline.pth.tar')
 
-    games = 100
+    nnet_ours = NNet(g)
+    nnet_ours.load_checkpoint('./models/', 'best60.pth.tar')
+
+    games = 200
 
     # 1) baseline/sym_mcts vs random, greedy
-    for sims in [50,100,200,400]:
+    for sims in [25,50,100,200]:
         cfgs = [
-            ("baseline", False, False),
-            ("dyn_only", True, False),
-            ("sym_only", False, True),
-            ("dyn_sym", True, True),
+            ("baseline", nnet_base),
+            ("ours", nnet_ours)
         ]
-        for label, use_dyn, use_sym in cfgs:
-            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym, use_dyn_c=use_dyn)
+        for label, nnet in cfgs:
+            p_mcts = make_mcts_player(g, nnet, sims=sims)
             run_matchup(f"{label} vs random (sims={sims})", p_mcts, rp, g, games)
             run_matchup(f"{label} vs greedy (sims={sims})", p_mcts, gp, g, games)
 
@@ -94,25 +90,20 @@ def main():
     #    - dyn only (dyn=True, sym=False)
     #    - sym only (dyn=False, sym=True)
     #    - dyn+sym (dyn=True, sym=True)
-    for sims in [50,100,200,400]:
+    for sims in [25,50,100,200]:
         cfgs = [
-            ("baseline", False, False),
-            ("dyn_only", True, False),
-            ("sym_only", False, True),
-            ("dyn_sym", True, True),
+            ("baseline", nnet_base),
+            ("ours", nnet_ours)
         ]
-        for label, use_dyn, use_sym in cfgs:
-            p_mcts = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=use_sym, use_dyn_c=use_dyn)
+        for label, nnet in cfgs:
+            p_mcts = make_mcts_player(g, nnet, sims=sims)
             run_matchup(f"{label} vs alphabeta(d=3) (sims={sims})", p_mcts, mp, g, games)
 
     # 3) baseline vs variants (ensure equal sims on both sides): dyn_only, sym_only, dyn_sym
-    for sims in [50,100,200,400]:
-        p_base = make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=False)
+    for sims in [25,50,100,200]:
+        p_base = make_mcts_player(g, nnet_base, sims=sims,)
         opponents = [
-            ("baseline", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=False)),
-            ("dyn_only", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=False, use_dyn_c=True)),
-            ("sym_only", make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True, use_dyn_c=False)),
-            ("dyn_sym",  make_mcts_player(g, nnet, sims=sims, use_sym_mcts=True, use_dyn_c=True)),
+            ("ours", make_mcts_player(g, nnet_ours, sims=sims)),
         ]
         for label, p_var in opponents:
             run_matchup(f"baseline vs {label} (sims={sims})", p_base, p_var, g, games)
