@@ -41,6 +41,8 @@ def build_args(device: str = 'cpu', use_sym_mcts: bool = False, numMCTSSims: int
         'addRootNoise': False,
         'cuda': False if device == 'cpu' else True,
         'device': device,
+        'sym_eval': True,
+        'use_dyn_c': False,
     })
 def load_nnet(game: Game, checkpoint: str, device: str = 'cpu') -> NNet:
     args = dotdict({
@@ -174,7 +176,7 @@ def maybe_plot_hist(values: List[float], title: str, out_path: str):
         plt.hist(arr, bins=50, color='#4e79a7', alpha=0.9)
         plt.title(title)
         plt.tight_layout()
-        plt.savefig(out_path, dpi=150)
+        plt.savefig(out_path, dpi=600)
         plt.close()
     except Exception:
         # Matplotlib not available; skip silently
