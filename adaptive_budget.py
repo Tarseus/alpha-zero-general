@@ -166,14 +166,25 @@ class AdaptiveMCTSPlayer:
 
         # Pick action via final visit counts (temp=0 argmax tie-broken randomly)
         _, counts = self._root_counts(mcts, canonical_board)
-        if counts.sum() <= 0:
-            # Fallback to network prior
+        # Use current-orientation valids for selection masking
+        valids_cur = self.game.getValidMoves(canonical_board, 1)
+        counts_sel = counts.astype(np.float64).copy()
+        counts_sel = np.where(np.array(valids_cur) > 0, counts_sel, -1.0)
+        best = float(np.max(counts_sel)) if counts_sel.size > 0 else -1.0
+
+        if best < 0.0:
+            # Fallback to masked network prior
             pi, _ = self.nnet.predict(canonical_board)
-            a = int(np.argmax(pi))
+            p = np.array(pi, dtype=np.float64) * np.array(valids_cur, dtype=np.float64)
+            if np.sum(p) <= 0:
+                # Uniform over valid moves
+                valid_idx = np.flatnonzero(np.array(valids_cur) > 0)
+                a = int(np.random.choice(valid_idx)) if valid_idx.size > 0 else int(np.argmax(pi))
+            else:
+                a = int(np.argmax(p))
         else:
-            best = float(np.max(counts))
-            bestAs = np.flatnonzero(counts == best)
-            a = int(np.random.choice(bestAs)) if bestAs.size > 0 else int(np.argmax(counts))
+            bestAs = np.flatnonzero(counts_sel == best)
+            a = int(np.random.choice(bestAs)) if bestAs.size > 0 else int(np.argmax(counts_sel))
 
         # Book-keeping
         self.used_sims += int(init_sims + add_sims)
