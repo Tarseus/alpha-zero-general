@@ -42,15 +42,18 @@ def make_fixed_player(game, nnet, sims: int):
 
 def make_adaptive_player(game, nnet, sims: int):
     # init_frac/min/max may be tuned; defaults are reasonable for Othello
+
+    expected_moves = 30
+
     return AdaptiveMCTSPlayer(
         game,
         nnet,
         avg_sims=sims,
         cpuct=1.0,
-        init_frac=0.2,
-        min_boost=0.5,
-        max_boost=1.5,
-        expected_moves_per_player=None,
+        init_frac=0.25,
+        min_boost=0.7,
+        max_boost=1.3,
+        expected_moves_per_player=expected_moves,
         sym_eval=True,
     )
 
@@ -74,7 +77,7 @@ def main():
     nnet = NNet(g)
     nnet.load_checkpoint('./models/', 'baseline.pth.tar')
 
-    games_per_match = 400  # 200 per side
+    games_per_match = 200  # 200 per side
 
     # Compare dynamic vs fixed at multiple average sims
     for sims in [25, 50, 100, 200]:
