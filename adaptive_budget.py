@@ -86,7 +86,12 @@ class AdaptiveMCTSPlayer:
         self.total_budget = self.avg_sims * self.expected_moves_per_player
 
     def endGame(self):
-        pass
+        if self.move_count > 0:
+            avg_sims = self.used_sims / float(self.move_count)
+            print(
+                f"[AdaptiveMCTSPlayer] 平均模拟次数 N = {avg_sims:.2f} "
+                f"(moves={self.move_count}, sims={self.used_sims})"
+            )
 
     def _run_simulations(self, mcts: MCTS, canonical_board, num: int):
         # Lightweight driver to run a fixed number of simulations
