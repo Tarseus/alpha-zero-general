@@ -6,7 +6,7 @@ import Arena
 from othello.OthelloGame import OthelloGame
 from othello.OthelloPlayers import *
 from othello.pytorch.NNet import NNetWrapper as NNet
-from adaptive_budget import AdaptiveMCTSPlayer, FixedMCTSPlayer
+from adaptive_budget import AdaptiveMCTSPlayer, FixedMCTSPlayer, RobustRootMCTSPlayer
 from utils import *
 
 """
@@ -57,6 +57,9 @@ def make_adaptive_player(game, nnet, sims: int):
         sym_eval=True,
     )
 
+def make_robust_player(game, nnet, sims:int):
+    return RobustRootMCTSPlayer(game, nnet, sims=sims, cpuct=1.0, sym_eval=True, frac=0.6)
+
 
 def run_matchup(label: str, p1, p2, game, games: int = 400, verbose: bool = False):
     arena = Arena.Arena(p1, p2, game, display=OthelloGame.display)
@@ -82,7 +85,7 @@ def main():
     # Compare dynamic vs fixed at multiple average sims
     for sims in [25, 50, 100, 200]:
         p_fixed = make_fixed_player(g, nnet, sims=sims)
-        p_adapt = make_adaptive_player(g, nnet, sims=sims)
+        p_adapt = make_robust_player(g, nnet, sims=sims)
         label = f"adaptive(vs fixed) sims={sims}"
         run_matchup(label, p_adapt, p_fixed, g, games_per_match)
 
@@ -92,7 +95,7 @@ def main():
     mp = AlphaBetaOthelloPlayer(g, depth=3).play
 
     for sims in [25, 50, 100, 200]:
-        p_adapt = make_adaptive_player(g, nnet, sims=sims)
+        p_adapt = make_robust_player(g, nnet, sims=sims)
         run_matchup(f"adaptive vs random (sims={sims})", p_adapt, rp, g, games_per_match)
         run_matchup(f"adaptive vs greedy (sims={sims})", p_adapt, gp, g, games_per_match)
         run_matchup(f"adaptive vs alphabeta(d=3) (sims={sims})", p_adapt, mp, g, games_per_match)
