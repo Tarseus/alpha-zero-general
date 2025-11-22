@@ -38,6 +38,83 @@ class FixedMCTSPlayer:
         return int(np.argmax(probs))
 
 
+class RobustRootMCTSPlayer:
+    """MCTS player with a more value-aware root move selection.
+
+    Search is identical to the standard FixedMCTSPlayer; only the final root
+    move is chosen differently:
+      1) Run MCTS and gather root visit counts N(s,a) and values Q(s,a).
+      2) Let bestN = max_a N(s,a).
+      3) Form a candidate set {a : N(s,a) >= frac * bestN}.
+      4) Among candidates, pick the action with the highest Q(s,a).
+
+    This keeps the tree policy unchanged and only tweaks the root choice,
+    making it a cheap but often helpful trick.
+    """
+
+    def __init__(self, game, nnet, sims: int, cpuct: float = 1.0, sym_eval: bool = True, frac: float = 0.6):
+        self.game = game
+        self.nnet = nnet
+        self.sims = int(sims)
+        self.cpuct = float(cpuct)
+        self.sym_eval = bool(sym_eval)
+        # fraction used to define "well-visited" actions at the root
+        self.frac = float(max(0.0, min(1.0, frac)))
+
+    def startGame(self):
+        pass
+
+    def endGame(self):
+        pass
+
+    def __call__(self, canonical_board):
+        # Run standard MCTS search
+        args = dotdict({
+            'numMCTSSims': self.sims,
+            'cpuct': self.cpuct,
+            'use_dyn_c': False,
+            'addRootNoise': False,
+            'sym_eval': self.sym_eval,
+        })
+        mcts = MCTS(self.game, self.nnet, args)
+        _ = mcts.getActionProb(canonical_board, temp=0)
+
+        # Extract root N(s,a) and Q(s,a) in current-orientation indexing
+        meta = mcts._sym_canonicalize(canonical_board)
+        s_key = meta['s_key']
+        perm_cur2can = meta['perm_cur2can']
+        A = self.game.getActionSize()
+
+        Ns = np.zeros(A, dtype=np.float32)
+        Qs = np.zeros(A, dtype=np.float32)
+        for a_cur in range(A):
+            a_can = int(perm_cur2can[a_cur])
+            key = (s_key, a_can)
+            Ns[a_cur] = float(mcts.Nsa.get(key, 0))
+            Qs[a_cur] = float(mcts.Qsa.get(key, 0.0))
+
+        bestN = float(Ns.max()) if Ns.size > 0 else 0.0
+        if bestN <= 0.0:
+            # No meaningful visits (e.g., terminal root); fall back to argmax N
+            return int(np.argmax(Ns))
+
+        threshold = self.frac * bestN
+        # Only consider reasonably well-visited actions
+        candidates = [a for a in range(A) if Ns[a] >= threshold]
+        if not candidates:
+            # Fallback: standard robust child (argmax visits)
+            bestN = float(Ns.max())
+            bestAs = [a for a in range(A) if Ns[a] == bestN]
+            return int(np.random.choice(bestAs))
+
+        # Among candidates, pick the action with highest Q, breaking ties by N
+        def score(a):
+            return (Qs[a], Ns[a])
+
+        best_a = max(candidates, key=score)
+        return int(best_a)
+
+
 class AdaptiveMCTSPlayer:
     """Adaptive per-move simulation budget based on root policy entropy.
 
