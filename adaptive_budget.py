@@ -18,6 +18,18 @@ class FixedMCTSPlayer:
         self.sims = int(sims)
         self.cpuct = float(cpuct)
         self.sym_eval = bool(sym_eval)
+        # persistent MCTS instance reused across moves & games (baseline pit.py style)
+        self.mcts = None
+
+    def _new_mcts(self):
+        args = dotdict({
+            'numMCTSSims': self.sims,
+            'cpuct': self.cpuct,
+            'use_dyn_c': False,
+            'addRootNoise': False,
+            'sym_eval': self.sym_eval,
+        })
+        return MCTS(self.game, self.nnet, args)
 
     def startGame(self):
         pass
@@ -26,15 +38,10 @@ class FixedMCTSPlayer:
         pass
 
     def __call__(self, canonical_board):
-        args = dotdict({
-            'numMCTSSims': self.sims,
-            'cpuct': self.cpuct,
-            'use_dyn_c': False,
-            'addRootNoise': False,
-            'sym_eval': self.sym_eval,
-        })
-        mcts = MCTS(self.game, self.nnet, args)
-        probs = mcts.getActionProb(canonical_board, temp=0)
+        # Match pit.py baseline: reuse a single MCTS instance across games.
+        if self.mcts is None:
+            self.mcts = self._new_mcts()
+        probs = self.mcts.getActionProb(canonical_board, temp=0)
         return int(np.argmax(probs))
 
 
@@ -60,15 +67,10 @@ class RobustRootMCTSPlayer:
         self.sym_eval = bool(sym_eval)
         # fraction used to define "well-visited" actions at the root
         self.frac = float(max(0.0, min(1.0, frac)))
+        # persistent MCTS instance reused across games (like pit.py)
+        self.mcts = None
 
-    def startGame(self):
-        pass
-
-    def endGame(self):
-        pass
-
-    def __call__(self, canonical_board):
-        # Run standard MCTS search
+    def _new_mcts(self):
         args = dotdict({
             'numMCTSSims': self.sims,
             'cpuct': self.cpuct,
@@ -76,7 +78,23 @@ class RobustRootMCTSPlayer:
             'addRootNoise': False,
             'sym_eval': self.sym_eval,
         })
-        mcts = MCTS(self.game, self.nnet, args)
+        return MCTS(self.game, self.nnet, args)
+
+    def startGame(self):
+        # Match pit.py behavior: do not reset tree between games.
+        pass
+
+    def endGame(self):
+        # Keep tree for subsequent games (full cross-game reuse).
+        pass
+
+    def __call__(self, canonical_board):
+        # Lazily create MCTS if startGame wasn't called
+        if self.mcts is None:
+            self.mcts = self._new_mcts()
+        mcts = self.mcts
+
+        # Run standard MCTS search (same as pit.py usage, but on a persistent tree)
         _ = mcts.getActionProb(canonical_board, temp=0)
 
         # Extract root N(s,a) and Q(s,a) in current-orientation indexing
