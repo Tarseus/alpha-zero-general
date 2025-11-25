@@ -1,7 +1,15 @@
 import os
+import sys
 import argparse
 
 import numpy as np
+
+# Ensure project root (containing pit3.py) is on sys.path even when this
+# script is invoked via an absolute path from another working directory.
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(THIS_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from pit3 import (
     make_game,
@@ -90,4 +98,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
