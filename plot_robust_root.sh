@@ -25,29 +25,29 @@ export CUDA_VISIBLE_DEVICES=1
 #   --model-file baseline.pth.tar \
 #   --out-dir ./robust_vs_baseline_data
 
-python scripts/plot_action_change_ratio.py \
-  --data-dir ./robust_vs_baseline_data \
-  --sims 25 50 100 200 \
-  --out-path ./compare/robust_vs_baseline_change_ratio.png
+# python scripts/plot_action_change_ratio.py \
+#   --data-dir ./robust_vs_baseline_data \
+#   --sims 25 50 100 200 \
+#   --out-path ./compare/robust_vs_baseline_change_ratio.png
 
-python scripts/plot_entropy_bucket_stats.py \
-  --data-dir ./robust_vs_baseline_data \
-  --sims 25 50 100 200 \
-  --bins 0.0 0.33 0.66 1.01 \
-  --out-dir ./robust_vs_baseline_plots
+# python scripts/plot_entropy_bucket_stats.py \
+#   --data-dir ./robust_vs_baseline_data \
+#   --sims 25 50 100 200 \
+#   --bins 0.0 0.33 0.66 1.01 \
+#   --out-dir ./robust_vs_baseline_plots
 
-python scripts/plot_delta_q_vs_sims.py \
-  --data-dir ./robust_vs_baseline_data \
-  --sims 25 50 100 200 \
-  --out-path ./compare/robust_vs_baseline_deltaQ_vs_sims.png
+# python scripts/plot_delta_q_vs_sims.py \
+#   --data-dir ./robust_vs_baseline_data \
+#   --sims 25 50 100 200 \
+#   --out-path ./compare/robust_vs_baseline_deltaQ_vs_sims.png
 
-python scripts/plot_changed_vs_nochange_games.py \
-  --data-dir ./robust_vs_baseline_data \
-  --sims 25 50 100 200 \
-  --out-path ./compare/robust_vs_baseline_changed_vs_nochange_games.png
+# python scripts/plot_changed_vs_nochange_games.py \
+#   --data-dir ./robust_vs_baseline_data \
+#   --sims 25 50 100 200 \
+#   --out-path ./compare/robust_vs_baseline_changed_vs_nochange_games.png
 
 python scripts/plot_qgap_bucket_stats.py \
   --data-dir ./robust_vs_baseline_data \
   --sims 25 50 100 200 \
-  --gap-bins 0.0 0.02 0.05 1.0 \
+  --gap-bins 0.0 0.02 0.05 0.1 0.2 0.4 0.7 1.0 \
   --out-dir ./robust_vs_baseline_plots
