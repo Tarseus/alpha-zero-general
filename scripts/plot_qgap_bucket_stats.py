@@ -1,6 +1,6 @@
 import os
 import argparse
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 
@@ -8,7 +8,14 @@ import numpy as np
 def _compute_qgap_bucket_stats(
     path: str,
     gap_bins: List[float],
-):
+) -> Tuple[List[str], np.ndarray, np.ndarray, np.ndarray]:
+    """
+    返回:
+      labels: 每个桶的字符串标签
+      change_ratio: 每个桶中的 changed 比例
+      mean_delta_q: 每个桶中（changed 且有 ΔQ）的平均 ΔQ
+      robust_win_rate: 每个桶中 robust 执子方的局部胜率
+    """
     data = np.load(path)
     Q_gap = np.asarray(data["Q_gap"], dtype=np.float64)
     delta_Q = np.asarray(data["delta_Q"], dtype=np.float64)
@@ -35,13 +42,16 @@ def _compute_qgap_bucket_stats(
         if cnt == 0:
             continue
 
+        # 改动频率
         c = changed[mask_bucket].astype(np.float64)
         change_ratio[i] = float(c.mean()) if c.size > 0 else float("nan")
 
+        # 桶内 ΔQ（只看 changed 且 ΔQ 有效）
         mask_dq = mask_bucket & changed & np.isfinite(delta_Q)
         if np.any(mask_dq):
             mean_delta_q[i] = float(delta_Q[mask_dq].mean())
 
+        # 桶内 robust 执子方的局部胜率
         mask_rob = mask_bucket & actor_is_robust
         if np.any(mask_rob):
             wins = (outcome[mask_rob] > 0).astype(np.float64)
@@ -53,10 +63,10 @@ def _compute_qgap_bucket_stats(
 def main():
     ap = argparse.ArgumentParser(
         description=(
-            "Plot Q-gap bucket stats per sims:\n"
-            "  (1) action-change ratio per ΔQ_gap bucket,\n"
-            "  (2) mean ΔQ in each bucket (on changed roots),\n"
-            "  (3) robust local win-rate per bucket.\n"
+            "Plot Q-gap bucket stats across sims:\n"
+            "  - action-change ratio per ΔQ_gap bucket (still per-sims),\n"
+            "  - ONE grouped bar chart for mean ΔQ (buckets × sims),\n"
+            "  - ONE grouped bar chart for robust local win-rate (buckets × sims).\n"
             "Requires fields: Q_gap, delta_Q, changed, actor_is_robust, outcome."
         )
     )
@@ -84,7 +94,7 @@ def main():
         "--out-dir",
         type=str,
         default="./robust_vs_baseline_plots",
-        help="Directory to save per-sims bar charts.",
+        help="Directory to save plots.",
     )
     args = ap.parse_args()
 
@@ -117,6 +127,12 @@ def main():
             )
         return
 
+    # 1) 先逐 sims 计算桶统计，并保留改动频率单独画
+    labels_ref: List[str] = []
+    all_change_ratio = []
+    all_mean_delta_q = []
+    all_robust_wr = []
+
     for sims in args.sims:
         path = os.path.join(args.data_dir, f"robust_vs_baseline_sims{sims}.npz")
         if not os.path.exists(path):
@@ -126,9 +142,17 @@ def main():
         labels, change_ratio, mean_delta_q, robust_wr = _compute_qgap_bucket_stats(
             path, args.gap_bins
         )
-        idx = np.arange(len(labels))
+        if not labels_ref:
+            labels_ref = labels
+        elif labels != labels_ref:
+            raise ValueError("Bucket labels differ across sims; check gap_bins settings.")
 
-        # 1) 改动频率
+        all_change_ratio.append(change_ratio)
+        all_mean_delta_q.append(mean_delta_q)
+        all_robust_wr.append(robust_wr)
+
+        # 单独输出每个 sims 的改动频率图（保持原有功能）
+        idx = np.arange(len(labels))
         vals_cr = np.where(np.isfinite(change_ratio), change_ratio, 0.0)
         plt.figure(figsize=(5.5, 3.5))
         plt.bar(idx, vals_cr, tick_label=labels, color="#4e79a7")
@@ -141,40 +165,58 @@ def main():
         out_path_cr = os.path.join(args.out_dir, f"qgap_change_ratio_sims{sims}.png")
         plt.savefig(out_path_cr, dpi=600)
         plt.close()
+        print(f"[sims={sims}] saved change-ratio plot: {out_path_cr}")
 
-        # 2) 平均 ΔQ（只在 changed roots 上）
-        vals_dq = np.where(np.isfinite(mean_delta_q), mean_delta_q, 0.0)
-        plt.figure(figsize=(5.5, 3.5))
-        plt.bar(idx, vals_dq, tick_label=labels, color="#f28e2b")
-        plt.xlabel("ΔQ_gap bucket")
-        plt.ylabel("Mean ΔQ (changed roots)")
-        plt.title(f"Mean ΔQ per Q-gap bucket (sims={sims})")
-        plt.axhline(0.0, color="#444444", linewidth=1.0)
-        plt.xticks(rotation=25, ha="right")
-        plt.tight_layout()
-        out_path_dq = os.path.join(args.out_dir, f"qgap_mean_deltaQ_sims{sims}.png")
-        plt.savefig(out_path_dq, dpi=600)
-        plt.close()
+    if not labels_ref or not all_mean_delta_q or not all_robust_wr:
+        return
 
-        # 3) 局部 robust 胜率
-        vals_wr = np.where(np.isfinite(robust_wr), robust_wr, 0.0)
-        plt.figure(figsize=(5.5, 3.5))
-        plt.bar(idx, vals_wr, tick_label=labels, color="#59a14f")
-        plt.xlabel("ΔQ_gap bucket")
-        plt.ylabel("Robust local win rate")
-        plt.title(f"Robust win rate per Q-gap bucket (sims={sims})")
-        plt.ylim(0.0, 1.0)
-        plt.axhline(0.5, color="#444444", linewidth=1.0, linestyle="--")
-        plt.xticks(rotation=25, ha="right")
-        plt.tight_layout()
-        out_path_wr = os.path.join(args.out_dir, f"qgap_local_winrate_sims{sims}.png")
-        plt.savefig(out_path_wr, dpi=600)
-        plt.close()
+    sims_arr = np.asarray(args.sims, dtype=np.int32)
+    nb = len(labels_ref)
+    idx = np.arange(nb)
+    S = len(sims_arr)
+    width = 0.8 / max(S, 1)
 
-        print(f"[sims={sims}] saved Q-gap plots:")
-        print(f"  {out_path_cr}")
-        print(f"  {out_path_dq}")
-        print(f"  {out_path_wr}")
+    all_mean_delta_q_arr = np.asarray(all_mean_delta_q, dtype=np.float64)  # (S, B)
+    all_robust_wr_arr = np.asarray(all_robust_wr, dtype=np.float64)  # (S, B)
+
+    # 2) qgap_mean_deltaQ：每个桶画多条柱子，区分不同 sims
+    plt.figure(figsize=(6.5, 3.8))
+    for i, sims in enumerate(sims_arr):
+        vals = np.where(np.isfinite(all_mean_delta_q_arr[i]), all_mean_delta_q_arr[i], 0.0)
+        x_offset = idx + (i - S / 2) * width + width / 2
+        plt.bar(x_offset, vals, width=width, label=f"sims={int(sims)}")
+    plt.xlabel("ΔQ_gap bucket")
+    plt.ylabel("Mean ΔQ (changed roots)")
+    plt.title("Mean ΔQ per Q-gap bucket (all sims)")
+    plt.axhline(0.0, color="#444444", linewidth=1.0)
+    plt.xticks(idx, labels_ref, rotation=25, ha="right")
+    plt.legend()
+    plt.tight_layout()
+    out_path_dq_all = os.path.join(args.out_dir, "qgap_mean_deltaQ_all_sims.png")
+    plt.savefig(out_path_dq_all, dpi=600)
+    plt.close()
+
+    # 3) qgap_local_winrate：每个桶多条柱子，对应不同 sims
+    plt.figure(figsize=(6.5, 3.8))
+    for i, sims in enumerate(sims_arr):
+        vals = np.where(np.isfinite(all_robust_wr_arr[i]), all_robust_wr_arr[i], 0.0)
+        x_offset = idx + (i - S / 2) * width + width / 2
+        plt.bar(x_offset, vals, width=width, label=f"sims={int(sims)}")
+    plt.xlabel("ΔQ_gap bucket")
+    plt.ylabel("Robust local win rate")
+    plt.title("Robust win rate per Q-gap bucket (all sims)")
+    plt.ylim(0.0, 1.0)
+    plt.axhline(0.5, color="#444444", linewidth=1.0, linestyle="--")
+    plt.xticks(idx, labels_ref, rotation=25, ha="right")
+    plt.legend()
+    plt.tight_layout()
+    out_path_wr_all = os.path.join(args.out_dir, "qgap_local_winrate_all_sims.png")
+    plt.savefig(out_path_wr_all, dpi=600)
+    plt.close()
+
+    print("Saved combined Q-gap plots:")
+    print(f"  {out_path_dq_all}")
+    print(f"  {out_path_wr_all}")
 
 
 if __name__ == "__main__":
