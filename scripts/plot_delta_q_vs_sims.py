@@ -1,0 +1,125 @@
+import os
+import argparse
+import math
+from typing import List
+
+import numpy as np
+
+
+def _load_delta_q_stats(data_dir: str, sims_list: List[int]):
+    sims_arr = np.asarray(sims_list, dtype=np.int32)
+    means = []
+    stds = []
+    ns = []
+    ci95 = []
+
+    for s in sims_arr:
+        path = os.path.join(data_dir, f"robust_vs_baseline_sims{s}.npz")
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Missing data file for sims={s}: {path}")
+        data = np.load(path)
+        delta_q = np.asarray(data["delta_Q"], dtype=np.float64)
+        changed = np.asarray(data["changed"], dtype=bool)
+
+        mask = changed & np.isfinite(delta_q)
+        vals = delta_q[mask]
+        n = int(vals.size)
+        ns.append(n)
+        if n == 0:
+            means.append(float("nan"))
+            stds.append(float("nan"))
+            ci95.append(float("nan"))
+            continue
+
+        m = float(vals.mean())
+        s_val = float(vals.std(ddof=1 if n > 1 else 0))
+        means.append(m)
+        stds.append(s_val)
+        ci95.append(1.96 * s_val / math.sqrt(n) if n > 1 else 0.0)
+
+    return sims_arr, np.asarray(means), np.asarray(stds), np.asarray(ns), np.asarray(ci95)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=(
+            "Plot mean ΔQ per sims (changed roots only), using existing "
+            "robust_vs_baseline_sims*.npz files augmented with delta_Q.\n"
+            "Requires fields: changed, delta_Q."
+        )
+    )
+    ap.add_argument(
+        "--data-dir",
+        type=str,
+        default="./robust_vs_baseline_data",
+        help="Directory containing robust_vs_baseline_sims*.npz files.",
+    )
+    ap.add_argument(
+        "--sims",
+        type=int,
+        nargs="+",
+        default=[25, 50, 100, 200],
+        help="List of sims values to include on the x-axis.",
+    )
+    ap.add_argument(
+        "--out-path",
+        type=str,
+        default="./compare/robust_vs_baseline_deltaQ_vs_sims.png",
+        help="Output path for the line+errorbar plot PNG.",
+    )
+    args = ap.parse_args()
+
+    sims, means, stds, ns, ci95 = _load_delta_q_stats(args.data_dir, args.sims)
+
+    # If matplotlib is unavailable, fall back to console summary.
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("Matplotlib not available; skipping plot.")
+        print("sims:", list(map(int, sims)))
+        print("n_changed:", [int(x) for x in ns])
+        print("mean_delta_Q:", [float(x) for x in means])
+        print("std_delta_Q:", [float(x) for x in stds])
+        print("ci95:", [float(x) for x in ci95])
+        return
+
+    plt.figure(figsize=(5.5, 3.8))
+    # Use ci95 as error bars; if nan, matplotlib will ignore.
+    plt.errorbar(
+        sims,
+        means,
+        yerr=ci95,
+        marker="o",
+        color="#4e79a7",
+        capsize=4,
+        linestyle="-",
+    )
+    plt.xlabel("MCTS sims")
+    plt.ylabel("Mean ΔQ on changed roots")
+    plt.title("Mean ΔQ per sims (robust vs baseline)")
+    plt.grid(True, alpha=0.3)
+    plt.axhline(0.0, color="#444444", linewidth=1.0, linestyle="--")
+    plt.tight_layout()
+
+    out_dir = os.path.dirname(args.out_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(args.out_path, dpi=600)
+    plt.close()
+
+    print("sims:", list(map(int, sims)))
+    print("n_changed:", [int(x) for x in ns])
+    print("mean_delta_Q:", [f"{x:.5f}" if np.isfinite(x) else "nan" for x in means])
+    print("std_delta_Q:", [f"{x:.5f}" if np.isfinite(x) else "nan" for x in stds])
+    print(
+        "ci95:",
+        [
+            f"[{(m - c):.5f},{(m + c):.5f}]" if np.isfinite(c) else "nan"
+            for m, c in zip(means, ci95)
+        ],
+    )
+
+
+if __name__ == "__main__":
+    main()
+
