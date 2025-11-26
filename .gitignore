@@ -24,3 +24,5 @@ checkpoints/
 /diy_sym1/
 /teacher/
 /ours/
+*.out
+*.npz

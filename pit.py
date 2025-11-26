@@ -72,7 +72,7 @@ def main():
     nnet_ours = NNet(g)
     nnet_ours.load_checkpoint('./models/', 'best60.pth.tar')
 
-    games = 200
+    games = 1000
 
     # 1) baseline/sym_mcts vs random, greedy
     for sims in [25,50,100,200]:
@@ -90,7 +90,7 @@ def main():
     #    - dyn only (dyn=True, sym=False)
     #    - sym only (dyn=False, sym=True)
     #    - dyn+sym (dyn=True, sym=True)
-    for sims in [25,50,100,200]:
+    for sims in [100,200]:
         cfgs = [
             ("baseline", nnet_base),
             ("ours", nnet_ours)

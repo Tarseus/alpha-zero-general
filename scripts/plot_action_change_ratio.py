@@ -55,9 +55,9 @@ def main():
     try:
         import matplotlib.pyplot as plt
     except Exception:
-        print("Matplotlib not available; skipping plot.")
-        print("sims:", list(map(int, sims)))
-        print("action_change_ratio:", [float(r) for r in ratios])
+        print("Matplotlib not available; skipping plot.", flush=True)
+        print("sims:", list(map(int, sims)), flush=True)
+        print("action_change_ratio:", [float(r) for r in ratios], flush=True)
         return
 
     plt.figure(figsize=(6, 3.8))
@@ -75,9 +75,9 @@ def main():
     plt.savefig(args.out_path, dpi=600)
     plt.close()
 
-    print("sims:", list(map(int, sims)))
-    print("action_change_ratio:", [f"{r:.4f}" for r in ratios])
-    print(f"Saved line plot to: {args.out_path}")
+    print("sims:", list(map(int, sims)), flush=True)
+    print("action_change_ratio:", [f"{r:.4f}" for r in ratios], flush=True)
+    print(f"Saved line plot to: {args.out_path}", flush=True)
 
 
 if __name__ == "__main__":

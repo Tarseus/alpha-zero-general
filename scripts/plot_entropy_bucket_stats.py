@@ -95,22 +95,22 @@ def main():
     try:
         import matplotlib.pyplot as plt
     except Exception:
-        print("Matplotlib not available; skipping plots.")
+        print("Matplotlib not available; skipping plots.", flush=True)
         for s in args.sims:
             path = os.path.join(args.data_dir, f"robust_vs_baseline_sims{s}.npz")
             if not os.path.exists(path):
-                print(f"Missing data file for sims={s}: {path}")
+                print(f"Missing data file for sims={s}: {path}", flush=True)
                 continue
             labels, change_ratio, improvement = _compute_bucket_stats(path, args.bins)
-            print(f"[sims={s}] entropy buckets: {labels}")
-            print(f"  change_ratio: {[f'{x:.4f}' if np.isfinite(x) else 'nan' for x in change_ratio]}")
-            print(f"  improvement : {[f'{x:.4f}' if np.isfinite(x) else 'nan' for x in improvement]}")
+            print(f"[sims={s}] entropy buckets: {labels}", flush=True)
+            print(f"  change_ratio: {[f'{x:.4f}' if np.isfinite(x) else 'nan' for x in change_ratio]}", flush=True)
+            print(f"  improvement : {[f'{x:.4f}' if np.isfinite(x) else 'nan' for x in improvement]}", flush=True)
         return
 
     for sims in args.sims:
         path = os.path.join(args.data_dir, f"robust_vs_baseline_sims{sims}.npz")
         if not os.path.exists(path):
-            print(f"Missing data file for sims={sims}: {path}")
+            print(f"Missing data file for sims={sims}: {path}", flush=True)
             continue
 
         labels, change_ratio, improvement = _compute_bucket_stats(path, args.bins)
@@ -150,9 +150,9 @@ def main():
         plt.savefig(out_path_impr, dpi=600)
         plt.close()
 
-        print(f"[sims={sims}] saved:")
-        print(f"  {out_path_cr}")
-        print(f"  {out_path_impr}")
+        print(f"[sims={sims}] saved:", flush=True)
+        print(f"  {out_path_cr}", flush=True)
+        print(f"  {out_path_impr}", flush=True)
 
 
 if __name__ == "__main__":
