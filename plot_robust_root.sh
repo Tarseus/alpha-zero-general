@@ -51,3 +51,9 @@ python scripts/plot_qgap_bucket_stats.py \
   --sims 25 50 100 200 \
   --gap-bins 0.0 0.02 0.05 0.1 0.2 0.4 0.7 1.0 \
   --out-dir ./robust_vs_baseline_plots
+
+python scripts/plot_phase_change_ratio.py \
+  --data-dir ./robust_vs_baseline_data \
+  --sims 25 50 100 200 \
+  --phase-bins 0.0 0.33 0.66 1.01 \
+  --out-path ./robust_vs_baseline_plots/phase_change_ratio_all_sims.png
