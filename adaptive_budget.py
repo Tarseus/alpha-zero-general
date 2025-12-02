@@ -5,6 +5,52 @@ from MCTS import MCTS
 from utils import dotdict
 
 
+def robust_root_select(Ns: np.ndarray, Qs: np.ndarray, frac: float):
+    """
+    Given root visit counts Ns and values Qs (current-orientation indexing),
+    compute:
+      - baseline_action: argmax_a Ns[a] (ties broken uniformly at random)
+      - robust_action  : among actions with Ns[a] >= frac * max_a Ns[a],
+                         pick the one with highest Q[a] (ties by Ns).
+
+    Returns (baseline_action, robust_action) as ints. If there are no
+    meaningful visits (max Ns <= 0), both fall back to argmax Ns.
+    """
+    Ns = np.asarray(Ns, dtype=np.float32)
+    Qs = np.asarray(Qs, dtype=np.float32)
+    A = int(Ns.size)
+    if A == 0:
+        return 0, 0
+
+    bestN = float(Ns.max())
+    if not np.isfinite(bestN):
+        bestN = 0.0
+
+    if bestN <= 0.0:
+        # No visits recorded (e.g., terminal root); fall back to argmax Ns
+        bestAs = np.flatnonzero(Ns == bestN)
+        if bestAs.size == 0:
+            return 0, 0
+        a = int(np.random.choice(bestAs))
+        return a, a
+
+    bestAs = np.flatnonzero(Ns == bestN)
+    baseline_action = int(np.random.choice(bestAs)) if bestAs.size > 0 else int(np.argmax(Ns))
+
+    frac_clamped = float(max(0.0, min(1.0, frac)))
+    threshold = frac_clamped * bestN
+    candidates = [a for a in range(A) if Ns[a] >= threshold]
+    if not candidates:
+        # Fallback: at least keep standard argmax-visits actions
+        candidates = bestAs.tolist() if bestAs.size > 0 else [baseline_action]
+
+    def score(a: int):
+        return (float(Qs[a]), float(Ns[a]))
+
+    robust_action = int(max(candidates, key=score))
+    return baseline_action, robust_action
+
+
 class FixedMCTSPlayer:
     """Fixed per-move simulation budget MCTS player.
 
@@ -110,27 +156,8 @@ class RobustRootMCTSPlayer:
             key = (s_key, a_can)
             Ns[a_cur] = float(mcts.Nsa.get(key, 0))
             Qs[a_cur] = float(mcts.Qsa.get(key, 0.0))
-
-        bestN = float(Ns.max()) if Ns.size > 0 else 0.0
-        if bestN <= 0.0:
-            # No meaningful visits (e.g., terminal root); fall back to argmax N
-            return int(np.argmax(Ns))
-
-        threshold = self.frac * bestN
-        # Only consider reasonably well-visited actions
-        candidates = [a for a in range(A) if Ns[a] >= threshold]
-        if not candidates:
-            # Fallback: standard robust child (argmax visits)
-            bestN = float(Ns.max())
-            bestAs = [a for a in range(A) if Ns[a] == bestN]
-            return int(np.random.choice(bestAs))
-
-        # Among candidates, pick the action with highest Q, breaking ties by N
-        def score(a):
-            return (Qs[a], Ns[a])
-
-        best_a = max(candidates, key=score)
-        return int(best_a)
+        _, robust_action = robust_root_select(Ns, Qs, self.frac)
+        return int(robust_action)
 
 
 class AdaptiveMCTSPlayer:

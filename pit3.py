@@ -6,7 +6,13 @@ import Arena
 from othello.OthelloGame import OthelloGame
 from othello.OthelloPlayers import *
 from othello.pytorch.NNet import NNetWrapper as NNet
-from adaptive_budget import AdaptiveMCTSPlayer, FixedMCTSPlayer, RobustRootMCTSPlayer
+from MCTS import MCTS
+from adaptive_budget import (
+    AdaptiveMCTSPlayer,
+    FixedMCTSPlayer,
+    RobustRootMCTSPlayer,
+    robust_root_select,
+)
 from utils import *
 
 """
@@ -245,6 +251,174 @@ def collect_robust_vs_baseline_data(
         play_one_game(i, robust_as_player1=False)
 
     # 将 list[dict] 整理成列式 numpy 结构，便于保存/分析
+    if not records:
+        return {}
+
+    boards_before = np.stack([r["board_before"] for r in records]).astype(np.int8)
+    boards_after = np.stack([r["board_after"] for r in records]).astype(np.int8)
+
+    data = {
+        "sims": int(sims),
+        "game_index": np.array([r["game_index"] for r in records], dtype=np.int32),
+        "move_index": np.array([r["move_index"] for r in records], dtype=np.int32),
+        "player_global": np.array([r["player_global"] for r in records], dtype=np.int8),
+        "actor_is_robust": np.array([r["actor_is_robust"] for r in records], dtype=bool),
+        "baseline_action": np.array([r["baseline_action"] for r in records], dtype=np.int16),
+        "robust_action": np.array([r["robust_action"] for r in records], dtype=np.int16),
+        "changed": np.array([r["changed"] for r in records], dtype=bool),
+        "entropy": np.array([r["entropy"] for r in records], dtype=np.float32),
+        "Q_base": np.array([r["Q_base"] for r in records], dtype=np.float32),
+        "Q_rob": np.array([r["Q_rob"] for r in records], dtype=np.float32),
+        "delta_Q": np.array([r["delta_Q"] for r in records], dtype=np.float32),
+        "Q_gap": np.array([r["Q_gap"] for r in records], dtype=np.float32),
+        "p1_count_before": np.array([r["p1_count_before"] for r in records], dtype=np.int16),
+        "p2_count_before": np.array([r["p2_count_before"] for r in records], dtype=np.int16),
+        "p1_count_after": np.array([r["p1_count_after"] for r in records], dtype=np.int16),
+        "p2_count_after": np.array([r["p2_count_after"] for r in records], dtype=np.int16),
+        "score_before": np.array([r["score_before"] for r in records], dtype=np.int16),
+        "score_after": np.array([r["score_after"] for r in records], dtype=np.int16),
+        "score_delta": np.array([r["score_delta"] for r in records], dtype=np.int16),
+        "outcome": np.array([r["outcome"] for r in records], dtype=np.int8),
+        "board_before": boards_before,
+        "board_after": boards_after,
+    }
+    return data
+
+
+def collect_robust_vs_baseline_data(
+    game,
+    nnet,
+    sims: int,
+    games: int = 200,
+    robust_frac: float = 0.6,
+):
+    """
+    新版数据收集：在同一棵 MCTS 树上同时得到 baseline 根动作和 robust-root 根动作，
+    并记录 Q_base、Q_rob 与 ΔQ=Q_rob-Q_base（理论上 ΔQ>=0）。
+    其余字段与旧版保持兼容。
+    """
+
+    records = []
+
+    def play_one_game(game_index: int, robust_as_player1: bool):
+        board = game.getInitBoard()
+        cur_player = 1
+        move_idx = 0
+        game_records = []
+
+        while game.getGameEnded(board, cur_player) == 0:
+            move_idx += 1
+            canonical = game.getCanonicalForm(board, cur_player)
+
+            args = dotdict({
+                "numMCTSSims": int(sims),
+                "cpuct": 1.0,
+                "use_dyn_c": False,
+                "addRootNoise": False,
+                "sym_eval": True,
+            })
+            mcts = MCTS(game, nnet, args)
+            _ = mcts.getActionProb(canonical, temp=0)
+
+            meta = mcts._sym_canonicalize(canonical)
+            s_key = meta["s_key"]
+            perm_cur2can = meta["perm_cur2can"]
+            A = game.getActionSize()
+
+            Ns = np.zeros(A, dtype=np.float32)
+            Qs = np.zeros(A, dtype=np.float32)
+            valids = game.getValidMoves(canonical, 1)
+            for a_cur in range(A):
+                if valids[a_cur] <= 0:
+                    continue
+                a_can = int(perm_cur2can[a_cur])
+                key = (s_key, a_can)
+                Ns[a_cur] = float(mcts.Nsa.get(key, 0))
+                Qs[a_cur] = float(mcts.Qsa.get(key, 0.0))
+
+            a_base, a_robust = robust_root_select(Ns, Qs, robust_frac)
+
+            if 0 <= a_base < len(Qs) and valids[a_base] > 0:
+                Q_base = float(Qs[a_base])
+            else:
+                Q_base = float("nan")
+
+            if 0 <= a_robust < len(Qs) and valids[a_robust] > 0:
+                Q_rob = float(Qs[a_robust])
+            else:
+                Q_rob = float("nan")
+
+            if np.isfinite(Q_base) and np.isfinite(Q_rob):
+                delta_Q = float(Q_rob - Q_base)
+            else:
+                delta_Q = float("nan")
+
+            Q_gap = _compute_q_gap(Qs, valids)
+
+            actor_is_robust = (cur_player == 1 and robust_as_player1) or (
+                cur_player == -1 and not robust_as_player1
+            )
+            action = a_robust if actor_is_robust else a_base
+
+            H = _root_policy_entropy(game, nnet, canonical)
+
+            board_before = np.array(board, copy=True)
+            p1_before = int((board == 1).sum())
+            p2_before = int((board == -1).sum())
+            score_before = int(game.getScore(board, cur_player))
+
+            board_after, next_player = game.getNextState(board, cur_player, action)
+            board_after = np.array(board_after, copy=True)
+            p1_after = int((board_after == 1).sum())
+            p2_after = int((board_after == -1).sum())
+            score_after = int(game.getScore(board_after, cur_player))
+
+            rec = {
+                "game_index": int(game_index),
+                "move_index": int(move_idx),
+                "sims": int(sims),
+                "player_global": int(cur_player),
+                "actor_is_robust": bool(actor_is_robust),
+                "baseline_action": int(a_base),
+                "robust_action": int(a_robust),
+                "Q_base": Q_base,
+                "Q_rob": Q_rob,
+                "delta_Q": delta_Q,
+                "Q_gap": Q_gap,
+                "changed": bool(a_base != a_robust),
+                "entropy": float(H),
+                "p1_count_before": p1_before,
+                "p2_count_before": p2_before,
+                "p1_count_after": p1_after,
+                "p2_count_after": p2_after,
+                "score_before": score_before,
+                "score_after": score_after,
+                "score_delta": int(score_after - score_before),
+                "board_before": board_before,
+                "board_after": board_after,
+                "outcome": None,
+            }
+            game_records.append(rec)
+
+            board, cur_player = board_after, next_player
+
+        result_p1 = int(game.getGameEnded(board, 1))
+        for rec in game_records:
+            pg = rec["player_global"]
+            if result_p1 == 0:
+                outcome = 0
+            else:
+                outcome = result_p1 if pg == 1 else -result_p1
+            rec["outcome"] = int(outcome)
+
+        records.extend(game_records)
+
+    half = games // 2
+    for i in range(half):
+        play_one_game(i, robust_as_player1=True)
+    for i in range(half, games):
+        play_one_game(i, robust_as_player1=False)
+
     if not records:
         return {}
 
