@@ -41,17 +41,17 @@ export CUDA_VISIBLE_DEVICES=1
 #   --sims 25 50 100 200 \
 #   --out-path ./compare/robust_vs_baseline_deltaQ_vs_sims.png
 
-python scripts/plot_changed_vs_nochange_games.py \
-  --data-dir ./robust_vs_baseline_data \
-  --sims 25 50 100 200 \
-  --out-path ./compare/robust_vs_baseline_changed_vs_nochange_games.png
+# python scripts/plot_changed_vs_nochange_games.py \
+#   --data-dir ./robust_vs_baseline_data \
+#   --sims 25 50 100 200 \
+#   --out-path ./compare/robust_vs_baseline_changed_vs_nochange_games.png
 
 python scripts/plot_qgap_bucket_stats.py \
   --data-dir ./robust_vs_baseline_data \
   --sims 25 50 100 200 \
-  --gap-bins 0.0 0.02 0.05 0.1 0.2 0.4 0.7 1.0 \
+  --gap-bins 0.0 0.01 0.05 1.0 \
   --out-dir ./robust_vs_baseline_plots
-
+# --gap-bins 0.0 0.02 0.05 0.1 0.2 0.4 0.7 1.0 \
 python scripts/plot_phase_change_ratio.py \
   --data-dir ./robust_vs_baseline_data \
   --sims 25 50 100 200 \

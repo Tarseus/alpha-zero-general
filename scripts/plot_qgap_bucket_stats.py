@@ -35,7 +35,7 @@ def _compute_qgap_bucket_stats(
 
     for i in range(nb):
         lo, hi = float(bins_arr[i]), float(bins_arr[i + 1])
-        labels.append(f"[{lo:.3f},{hi:.3f})")
+        labels.append(f"[{lo:.2f},{hi:.2f})")
 
         mask_bucket = np.isfinite(Q_gap) & (Q_gap >= lo) & (Q_gap < hi)
         cnt = int(mask_bucket.sum())
@@ -181,6 +181,9 @@ def main():
 
     # 2) qgap_mean_deltaQ：每个桶画多条柱子，区分不同 sims
     plt.figure(figsize=(6.5, 3.8))
+    print("="*80)
+    print(all_mean_delta_q_arr)
+    print("="*80)
     for i, sims in enumerate(sims_arr):
         vals = np.where(np.isfinite(all_mean_delta_q_arr[i]), all_mean_delta_q_arr[i], 0.0)
         x_offset = idx + (i - S / 2) * width + width / 2

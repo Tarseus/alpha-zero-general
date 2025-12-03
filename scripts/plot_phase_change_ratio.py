@@ -162,7 +162,7 @@ def main():
     plt.xlabel("Game phase (normalized move index)")
     plt.ylabel("Action change ratio")
     plt.title("Robust-root action change ratio vs game phase (all sims)")
-    plt.ylim(0.0, 0.2)
+    plt.ylim(0.0, 0.25)
     plt.xticks(idx, labels_ref, rotation=30, ha="center")
     plt.legend()
     plt.tight_layout()
