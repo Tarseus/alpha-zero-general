@@ -152,6 +152,8 @@ def load_samples_from_npz(
     *,
     only_changed: bool = True,
     max_samples: int | None = None,
+    phase_bins: Sequence[int] | None = None,
+    delta_q_bins: Sequence[float] | None = None,
 ) -> List[Dict[str, Any]]:
     """
     从 robust_vs_baseline_sims*.npz 中读取样本。
@@ -164,6 +166,14 @@ def load_samples_from_npz(
         - move_index   : 全局第几手
         - sims         : 生成该文件时使用的 numMCTSSims
         - idx_in_file  : 在原 npz 中的索引
+
+    采样策略（均匀子采样）：
+        - 若指定 phase_bins，则按 move_index 所在区间做“阶段分层”，
+          在每个阶段内尽量均匀抽取样本；
+        - 若指定 delta_q_bins，则要求数据文件中已有 delta_Q 字段，
+          按 delta_Q 所在区间做“ΔQ 分层”均匀抽样；
+        - 若两者都给出，则先按阶段再按 ΔQ 形成二维桶，各桶内均匀采样；
+        - 若都未给出，则退化为原来的顺序截断（只对 changed 或全部）。
     """
     data = np.load(path, allow_pickle=True)
 
@@ -174,6 +184,9 @@ def load_samples_from_npz(
     move_index = data["move_index"]
     changed = data["changed"].astype(bool)
 
+    # 可选字段：delta_Q，用于 ΔQ 分桶；如果不存在则后面忽略 delta_q_bins。
+    delta_Q = data["delta_Q"] if "delta_Q" in data.files else None
+
     # 文件级的 sims 标记（所有样本相同）
     sims_in_file = int(data["sims"])
 
@@ -182,8 +195,22 @@ def load_samples_from_npz(
     else:
         idx_all = np.arange(boards.shape[0], dtype=np.int64)
 
-    if max_samples is not None:
+    # 未指定任何分层方式时，保持旧行为：顺序截断。
+    if max_samples is not None and phase_bins is None and (
+        delta_q_bins is None or delta_Q is None
+    ):
         idx_all = idx_all[: int(max_samples)]
+    elif max_samples is not None:
+        # 分层均匀采样：按 phase_bins / delta_q_bins 对 idx_all 做分桶，
+        # 每个桶内最多采样 ~max_samples / num_buckets 个。
+        idx_all = _balanced_subsample_indices(
+            idx_all,
+            move_index=move_index,
+            delta_Q=delta_Q,
+            max_samples=int(max_samples),
+            phase_bins=phase_bins,
+            delta_q_bins=delta_q_bins,
+        )
 
     samples: List[Dict[str, Any]] = []
     for idx in idx_all:
@@ -200,6 +227,92 @@ def load_samples_from_npz(
         )
 
     return samples
+
+
+def _balanced_subsample_indices(
+    idx_all,
+    *,
+    move_index,
+    delta_Q,
+    max_samples: int,
+    phase_bins,
+    delta_q_bins,
+):
+    """
+    在给定的索引集合 idx_all 上，按照阶段 / ΔQ 分桶后做均匀子采样。
+
+    返回一个新的索引数组（仍为原文件下标），尽量保证：
+        - 总数不超过 max_samples；
+        - 每个非空桶中被采样的数量尽量接近 max_samples / num_buckets。
+    """
+    idx_all = np.asarray(idx_all, dtype=np.int64)
+    if idx_all.size == 0 or max_samples <= 0:
+        return idx_all
+
+    def _assign_bin(values, bins):
+        bins_arr = np.asarray(bins, dtype=float)
+        if bins_arr.ndim != 1 or bins_arr.size < 2:
+            raise ValueError("bins must be 1D with at least 2 elements")
+        b = np.digitize(values, bins_arr, right=False) - 1
+        b[(b < 0) | (b >= bins_arr.size - 1)] = -1
+        return b
+
+    phase_ids = None
+    if phase_bins is not None:
+        phase_ids = _assign_bin(np.asarray(move_index, dtype=float), phase_bins)
+
+    dq_ids = None
+    if delta_q_bins is not None and delta_Q is not None:
+        dq_vals = np.asarray(delta_Q, dtype=float)
+        dq_ids = _assign_bin(dq_vals, delta_q_bins)
+
+    if phase_ids is None and dq_ids is None:
+        if idx_all.size <= max_samples:
+            return idx_all
+        return np.random.choice(idx_all, size=max_samples, replace=False)
+
+    # 为每个样本生成一个桶 key
+    keys = []
+    n = len(move_index)
+    for i in range(n):
+        if phase_ids is not None and dq_ids is not None:
+            keys.append((int(phase_ids[i]), int(dq_ids[i])))
+        elif phase_ids is not None:
+            keys.append((int(phase_ids[i]),))
+        else:
+            keys.append((int(dq_ids[i]),))
+
+    bucket_to_indices = {}
+    for idx in idx_all:
+        k = keys[int(idx)]
+        if any(int(x) < 0 for x in (k if isinstance(k, tuple) else (k,))):
+            continue
+        bucket_to_indices.setdefault(k, []).append(int(idx))
+
+    if not bucket_to_indices:
+        return idx_all[:max_samples]
+
+    num_buckets = len(bucket_to_indices)
+    base_quota = max_samples // num_buckets
+    remainder = max_samples % num_buckets
+
+    selected = []
+    rng = np.random.default_rng()
+    for bi, (key, inds) in enumerate(bucket_to_indices.items()):
+        inds_arr = np.asarray(inds, dtype=np.int64)
+        quota = base_quota + (1 if bi < remainder else 0)
+        if quota <= 0:
+            continue
+        if inds_arr.size <= quota:
+            chosen = inds_arr
+        else:
+            chosen = rng.choice(inds_arr, size=quota, replace=False)
+        selected.extend(int(x) for x in chosen)
+
+    if not selected:
+        return idx_all[:max_samples]
+
+    return np.asarray(selected, dtype=np.int64)
 
 
 def run_one_step_experiment(
@@ -302,6 +415,14 @@ def run_one_step_experiment(
                 "draws_base": int(draws_base),
                 "wins_rob": int(wins_rob),
                 "draws_rob": int(draws_rob),
+                # 便于后续分析：每个样本自身的一步替换胜率提升
+                "base_win_rate": float(wins_base) / float(num_repeat) if num_repeat > 0 else float("nan"),
+                "rob_win_rate": float(wins_rob) / float(num_repeat) if num_repeat > 0 else float("nan"),
+                "delta_win": (
+                    float(wins_rob - wins_base) / float(num_repeat)
+                    if num_repeat > 0
+                    else float("nan")
+                ),
             }
         )
 
@@ -309,7 +430,11 @@ def run_one_step_experiment(
 
 
 def _summarize_results(results: Sequence[Dict[str, Any]]) -> Dict[str, float]:
-    """Compute overall win/draw rates from a list of per-sample results."""
+    """
+    Compute overall win/draw rates from a list of per-sample results.
+
+    除了整体胜率，本函数也可被下游分析复用。
+    """
     total_base = 0
     wins_base = 0
     draws_base = 0
@@ -403,7 +528,30 @@ def main():
         "--max-samples",
         type=int,
         default=None,
-        help="Optional cap on number of changed samples per sims value (for quick tests).",
+        help=(
+            "Optional cap on number of changed samples per sims value.\n"
+            "若同时给出 --phase-bins / --delta-q-bins，则在各桶中均匀采样，总量不超过该值。"
+        ),
+    )
+    ap.add_argument(
+        "--phase-bins",
+        type=int,
+        nargs="+",
+        default=None,
+        help=(
+            "Game phase buckets based on move_index, e.g. 1 20 40 60.\n"
+            "用于在不同对局阶段之间做均匀采样与分段统计。"
+        ),
+    )
+    ap.add_argument(
+        "--delta-q-bins",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "ΔQ buckets for balanced sampling / correlation, e.g. 0.0 0.02 0.05 1.0.\n"
+            "需要数据文件已由 augment_robust_npz_with_q.py 写入 delta_Q 字段。"
+        ),
     )
     ap.add_argument(
         "--model-dir",
@@ -441,7 +589,11 @@ def main():
 
         print(f"[one-step] sims={sims}: loading samples from {data_path}")
         samples = load_samples_from_npz(
-            data_path, only_changed=True, max_samples=args.max_samples
+            data_path,
+            only_changed=True,
+            max_samples=args.max_samples,
+            phase_bins=args.phase_bins,
+            delta_q_bins=args.delta_q_bins,
         )
         if not samples:
             print(f"[one-step] sims={sims}: no changed samples found, skipping.")
@@ -520,4 +672,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
