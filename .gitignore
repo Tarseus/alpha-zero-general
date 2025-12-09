@@ -28,3 +28,16 @@ checkpoints/
 
 scripts/
 *.sh
+
+compare/
+__pycache__/
+connect4/
+docker/
+dotsandboxes/
+gobang/
+pretrained_models/
+rts/
+santorini/
+tafl/
+tictactoe/
+tictactoe_3d/
