@@ -62,3 +62,7 @@ Some extensions have been implented [here](https://github.com/kevaday/alphazero-
 * [Plamen Totev](https://github.com/plamentotev) contributed Go Text Protocol player for Othello.
 
 Note: Chainer and TensorFlow v1 versions have been removed but can be found prior to commit [2ad461c](https://github.com/suragnair/alpha-zero-general/tree/2ad461c393ecf446e76f6694b613e394b8eb652f).
+
+### 测试用模型权重
+* 标准AlphaZero权重: models/baseline.pth.tar
+* TG权重: models/best60.pth.tar
