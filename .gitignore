@@ -20,9 +20,11 @@ checkpoints/
 /diy_dyn/
 /diy_dyn_sym/
 /diy_sym/
-/models/
 /diy_sym1/
 /teacher/
 /ours/
 *.out
 *.npz
+
+scripts/
+*.sh
